@@ -137,13 +137,7 @@ TRAZIP is a **cross-platform desktop application** for network diagnostics, pack
 
 ## Screenshots
 
-Screenshots are published as release assets. See the [v1.4.0 release](https://github.com/kerwilgil/trazip-releases/releases/tag/v1.4.0) for current captures of:
-
-- BGP Intelligence tabs (Summary, Prefixes, Neighbors, Topology, Security, Realtime, History, BGPlay, Observatory)
-- Live Capture (Summary / Chains / Hex)
-- VoIP Calls (per-direction RTP, RTCP, SDP comparison)
-- Network Diagnostics (Quick Diagnose, Ping, Traceroute, MTR)
-- LAN Explorer & Network Health
+Real product screenshots will be added here after physical capture from the current stable build.
 
 ---
 
