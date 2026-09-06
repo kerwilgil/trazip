@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="dark">
+<head>
+    <meta charset="UTF-8"/>
+    <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <title>TRAZIP — Motor de observaciones de red</title>
+    <script>
+      // Resolve the theme before first paint to avoid a flash of the wrong one.
+      // A theme the user picked explicitly always wins; with no stored choice
+      // we follow the OS setting instead of forcing dark, so the app opens
+      // matching the rest of the desktop.
+      (function () {
+        try {
+          var t = localStorage.getItem('trazip-theme');
+          if (t !== 'light' && t !== 'dark') {
+            t = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+          }
+          document.documentElement.setAttribute('data-theme', t);
+        } catch (e) {}
+      })();
+    </script>
+</head>
+<body>
+<div id="root"></div>
+<script src="./src/main.tsx" type="module"></script>
+</body>
+</html>

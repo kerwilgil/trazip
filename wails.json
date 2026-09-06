@@ -1,0 +1,20 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "trazip",
+  "outputfilename": "TRAZIP",
+  "frontend:install": "npm ci",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "Kerwil Gil",
+    "email": "kerwil.gil@up.ac.pa"
+  },
+  "info": {
+    "companyName": "TRAZIP",
+    "productName": "TRAZIP",
+    "productVersion": "1.4.0",
+    "copyright": "Copyright © 2026 Kerwil Gil",
+    "comments": "Diagnóstico, observabilidad y análisis defensivo de redes y VoIP"
+  }
+}

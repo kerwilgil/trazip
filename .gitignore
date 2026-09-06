@@ -1,0 +1,59 @@
+build/bin
+node_modules
+frontend/dist
+dist/
+
+# Go
+/trazip
+/trazip.exe
+*.exe
+*.test
+*.out
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Datasets externos (MaxMind, no versionar)
+data/*.mmdb
+data/*.csv
+# Las credenciales de descarga de MaxMind deben configurarse en la app y
+# almacenarse mediante securestore; nunca en archivos del repositorio.
+KEY ID.txt
+*maxmind*key*.txt
+# Almacenes que la app descarga en tiempo de ejecucion desde Settings/Datasets
+# (netclass, threatfeed, oui). Son datos de terceros con su propia caducidad:
+# versionarlos publicaria una copia congelada y desactualizada de listas ajenas.
+data/*.json
+
+# Security audit scratch (never commit)
+.marte-audits/
+
+# Clave privada de firma de releases (Ed25519, ver cmd/trazip-sign y
+# CONTEXT-trazip.md §15) — NUNCA debe vivir en este repositorio, ni
+# siquiera temporalmente. Solo la clave PUBLICA (internal/update/sign.go)
+# pertenece al codigo fuente; la privada vive exclusivamente en
+# almacenamiento seguro fuera de cualquier repo.
+.release-keys/
+*update-signing-private-key*
+*trazip-update*private*.txt
+*.ed25519
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Private keys / certificates
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Credentials
+credentials*
+secrets*
+*license-key*
+*license_key*
