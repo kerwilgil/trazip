@@ -38,8 +38,23 @@
 </div>
 
 > **TRAZIP is open source and local-first.**
-> This repository contains the official source code, documentation, development history from the public baseline onward, and community resources.
-> Stable binaries and signed updates are distributed through [`trazip-releases`](https://github.com/kerwilgil/trazip-releases).
+> This repository contains the official source code, documentation, and community resources.
+> Stable binaries and signed updates are available in
+> [`kerwilgil/trazip-releases`](https://github.com/kerwilgil/trazip-releases).
+
+---
+
+## Screenshots
+
+Screenshots are published as release assets. See the [v1.4.0 release](https://github.com/kerwilgil/trazip-releases/releases/tag/v1.4.0) for current captures of:
+
+- BGP Intelligence tabs (Summary, Prefixes, Neighbors, Topology, Security, Realtime, History, BGPlay, Observatory)
+- Live Capture (Summary / Chains / Hex)
+- VoIP Calls (per-direction RTP, RTCP, SDP comparison)
+- Network Diagnostics (Quick Diagnose, Ping, Traceroute, MTR)
+- LAN Explorer & Network Health
+
+*Real product screenshots will be embedded here when available.*
 
 ---
 
