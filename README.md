@@ -46,15 +46,44 @@
 
 ## Screenshots
 
-Screenshots are published as release assets. See the [v1.4.0 release](https://github.com/kerwilgil/trazip-releases/releases/tag/v1.4.0) for current captures of:
+Real screenshots of the TRAZIP v1.4.0 Windows build (portable,
+`SHA-256 A5671731A445C8CFF0AF11882EA77ABFF61F6DA92BC7B72CAD69BE53812BADAF`),
+captured natively from the application window. The observed public IP in the
+header is masked; everything else is the unretouched UI, driven against public
+targets (`1.1.1.1`, `cloudflare.com`, `AS13335`, `AS3333`).
 
-- BGP Intelligence tabs (Summary, Prefixes, Neighbors, Topology, Security, Realtime, History, BGPlay, Observatory)
-- Live Capture (Summary / Chains / Hex)
-- VoIP Calls (per-direction RTP, RTCP, SDP comparison)
-- Network Diagnostics (Quick Diagnose, Ping, Traceroute, MTR)
-- LAN Explorer & Network Health
-
-*Real product screenshots will be embedded here when available.*
+<table>
+<tr>
+<td width="50%" align="center">
+<img src="assets/screenshots/overview.png" alt="TRAZIP — Overview">
+<br><strong>Overview</strong>
+</td>
+<td width="50%" align="center">
+<img src="assets/screenshots/bgp-intelligence.png" alt="TRAZIP — BGP Intelligence">
+<br><strong>BGP Intelligence</strong>
+</td>
+</tr>
+<tr>
+<td width="50%" align="center">
+<img src="assets/screenshots/bgp-topology.png" alt="TRAZIP — BGP Topology">
+<br><strong>BGP Topology</strong>
+</td>
+<td width="50%" align="center">
+<img src="assets/screenshots/diagnostics.png" alt="TRAZIP — Network Diagnostics">
+<br><strong>Network Diagnostics</strong>
+</td>
+</tr>
+<tr>
+<td width="50%" align="center">
+<img src="assets/screenshots/web-intelligence.png" alt="TRAZIP — Web Intelligence">
+<br><strong>Web Intelligence</strong>
+</td>
+<td width="50%" align="center">
+<img src="assets/screenshots/live-capture.png" alt="TRAZIP — Live Capture">
+<br><strong>Live Capture</strong>
+</td>
+</tr>
+</table>
 
 ---
 
@@ -132,12 +161,6 @@ TRAZIP is a **cross-platform desktop application** for network diagnostics, pack
 - **MAC Lookup** — IEEE MA-L/MA-M/MA-S registry, explains matched prefix
 - **RDAP** — Registrar, dates, status, nameservers; handles subdomains correctly
 - **Reputation** — Spamhaus DROP, Tor exits — opt-in, local check, source cited
-
----
-
-## Screenshots
-
-Real product screenshots will be added here after physical capture from the current stable build.
 
 ---
 
