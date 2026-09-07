@@ -29,11 +29,11 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
-      - name: Run go test (internal packages only)
-        run: go test ./internal/... -count=1 -skip 'TestPingMonitorAgainstLoopback'
+      - name: Run go test (canonical)
+        run: go test ./... -count=1
 
-      - name: Run go vet (internal packages only)
-        run: go vet ./internal/...
+      - name: Run go vet (canonical)
+        run: go vet ./...
 
   backend-windows-test:
     name: Backend / Test (Windows)
@@ -50,11 +50,11 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
-      - name: Run go test (Windows, internal packages only)
-        run: go test ./internal/... -count=1 -skip 'TestPingMonitorAgainstLoopback'
+      - name: Run go test (Windows, canonical)
+        run: go test ./... -count=1
 
-      - name: Run go vet (Windows, internal packages only)
-        run: go vet ./internal/...
+      - name: Run go vet (Windows, canonical)
+        run: go vet ./...
 
   backend-macos-test:
     name: Backend / Test (macOS)
@@ -71,11 +71,11 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
-      - name: Run go test (macOS, internal packages only)
-        run: go test ./internal/... -count=1 -skip 'TestPingMonitorAgainstLoopback'
+      - name: Run go test (macOS, canonical)
+        run: go test ./... -count=1
 
-      - name: Run go vet (macOS, internal packages only)
-        run: go vet ./internal/...
+      - name: Run go vet (macOS, canonical)
+        run: go vet ./...
 
   frontend-build:
     name: Frontend / Build
