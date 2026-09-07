@@ -7,16 +7,6 @@ import (
 	"strings"
 )
 
-const (
-	// stableChannel is the only Manifest.Channel value this build trusts.
-	stableChannel = "stable"
-
-	// updaterAssetName is the ONLY filename ever accepted for the helper
-	// binary — fixed, never taken from the manifest as free text, exactly
-	// like expectedAppAssetName below.
-	updaterAssetName = "trazip-updater.exe"
-)
-
 var sha256HexPattern = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
 
 // expectedAppAssetName is the ONLY filename TRAZIP will ever accept for

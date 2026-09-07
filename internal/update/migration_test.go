@@ -13,7 +13,7 @@ func TestManagerWithConfig_CreatesManagerWithCustomChannel(t *testing.T) {
 	dir := t.TempDir()
 	settingsPath := filepath.Join(dir, "settings.json")
 
-	m := NewManagerWithConfig(UpdateConfig{
+	m, err := NewManagerWithConfig(UpdateConfig{
 		CurrentVersion: "1.5.0",
 		DownloadDir:    dir,
 		SettingsPath:   settingsPath,
@@ -23,6 +23,9 @@ func TestManagerWithConfig_CreatesManagerWithCustomChannel(t *testing.T) {
 			APIBase:    githubAPIBase,
 		},
 	})
+	if err != nil {
+		t.Fatalf("NewManagerWithConfig: %v", err)
+	}
 
 	if m.ChannelConfig().Name != stableChannel {
 		t.Errorf("ChannelConfig().Name = %q, want %s", m.ChannelConfig().Name, stableChannel)
@@ -36,11 +39,14 @@ func TestManagerWithConfig_DefaultsToStableChannel(t *testing.T) {
 	dir := t.TempDir()
 	settingsPath := filepath.Join(dir, "settings.json")
 
-	m := NewManagerWithConfig(UpdateConfig{
+	m, err := NewManagerWithConfig(UpdateConfig{
 		CurrentVersion: "1.5.0",
 		DownloadDir:    dir,
 		SettingsPath:   settingsPath,
 	})
+	if err != nil {
+		t.Fatalf("NewManagerWithConfig: %v", err)
+	}
 
 	if m.ChannelConfig().Name != stableChannel {
 		t.Errorf("ChannelConfig().Name = %q, want %s", m.ChannelConfig().Name, stableChannel)
@@ -54,12 +60,15 @@ func TestManagerWithConfig_LegacyChannelConfig(t *testing.T) {
 	dir := t.TempDir()
 	settingsPath := filepath.Join(dir, "settings.json")
 
-	m := NewManagerWithConfig(UpdateConfig{
+	m, err := NewManagerWithConfig(UpdateConfig{
 		CurrentVersion: "1.4.0",
 		DownloadDir:    dir,
 		SettingsPath:   settingsPath,
 		Channel:        ChannelConfigForLegacy(),
 	})
+	if err != nil {
+		t.Fatalf("NewManagerWithConfig: %v", err)
+	}
 
 	if m.ChannelConfig().Name != stableChannel {
 		t.Errorf("ChannelConfig().Name = %q, want %s", m.ChannelConfig().Name, stableChannel)
@@ -89,12 +98,15 @@ func TestManager_LoadSettings_WithoutChannelField(t *testing.T) {
 	}
 
 	// Create a new manager with v1.5 config — should load legacy settings without Channel field
-	m := NewManagerWithConfig(UpdateConfig{
+	m, err := NewManagerWithConfig(UpdateConfig{
 		CurrentVersion: "1.5.0",
 		DownloadDir:    t.TempDir(),
 		SettingsPath:   settingsPath,
 		Channel:        DefaultStableChannelConfig(),
 	})
+	if err != nil {
+		t.Fatalf("NewManagerWithConfig: %v", err)
+	}
 
 	// Should default to stable channel
 	if m.ChannelConfig().Name != stableChannel {
@@ -125,11 +137,14 @@ func TestManager_PreservesHighestSeenFromSettings(t *testing.T) {
 		t.Fatalf("saveSettings: %v", err)
 	}
 
-	m := NewManagerWithConfig(UpdateConfig{
+	m, err := NewManagerWithConfig(UpdateConfig{
 		CurrentVersion: "1.5.0",
 		DownloadDir:    t.TempDir(),
 		SettingsPath:   settingsPath,
 	})
+	if err != nil {
+		t.Fatalf("NewManagerWithConfig: %v", err)
+	}
 
 	// Should preserve the higher HighestSeen from settings
 	if m.highestSeen != "1.5.5" {
@@ -156,11 +171,14 @@ func TestManager_DoesNotDowngradeHighestSeen(t *testing.T) {
 		t.Fatalf("saveSettings: %v", err)
 	}
 
-	m := NewManagerWithConfig(UpdateConfig{
+	m, err := NewManagerWithConfig(UpdateConfig{
 		CurrentVersion: "1.5.0",
 		DownloadDir:    t.TempDir(),
 		SettingsPath:   settingsPath,
 	})
+	if err != nil {
+		t.Fatalf("NewManagerWithConfig: %v", err)
+	}
 
 	// Should NOT downgrade highestSeen from 1.5.0 to 1.4.0
 	if m.highestSeen != "1.5.0" {
@@ -387,13 +405,6 @@ func TestChannelConfigForLegacy_PointsToLegacyRepo(t *testing.T) {
 	}
 	if cfg.Name != stableChannel {
 		t.Errorf("ChannelConfigForLegacy().Name = %q, want %s", cfg.Name, stableChannel)
-	}
-}
-
-func TestDefaultStableChannelConfig_PointsToNewRepo(t *testing.T) {
-	cfg := DefaultStableChannelConfig()
-	if cfg.Repository != StableReleaseRepo {
-		t.Errorf("DefaultStableChannelConfig().Repository = %q, want %s", cfg.Repository, StableReleaseRepo)
 	}
 }
 

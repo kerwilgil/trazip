@@ -6,8 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
@@ -25,6 +28,56 @@ const (
 	// StableReleaseRepo is the v1.5+ official distribution channel.
 	StableReleaseRepo = "kerwilgil/trazip"
 )
+
+const (
+	// stableChannel is the only Manifest.Channel value this build trusts.
+	stableChannel = "stable"
+
+	// updaterAssetName is the ONLY filename ever accepted for the helper
+	// binary — fixed, never taken from the manifest as free text, exactly
+	// like expectedAppAssetName below.
+	updaterAssetName = "trazip-updater.exe"
+)
+
+// validateChannelConfig validates a ChannelConfig for production use.
+// Returns an error if the configuration is invalid.
+func validateChannelConfig(cfg ChannelConfig) error {
+	// Name: must be "stable" (only supported channel for now)
+	if cfg.Name != stableChannel {
+		return fmt.Errorf("channel name %q is not supported; only %q is allowed", cfg.Name, stableChannel)
+	}
+
+	// Repository: must be in owner/repo format (GitHub repository format)
+	if cfg.Repository == "" {
+		return fmt.Errorf("repository is required")
+	}
+	if !repositoryPattern.MatchString(cfg.Repository) {
+		return fmt.Errorf("repository %q must be in owner/repo format (e.g., owner/repo)", cfg.Repository)
+	}
+
+	// APIBase: if empty, defaults to GitHub; if provided, must be valid HTTPS URL
+	if cfg.APIBase != "" {
+		u, err := url.Parse(cfg.APIBase)
+		if err != nil {
+			return fmt.Errorf("APIBase %q is not a valid URL: %w", cfg.APIBase, err)
+		}
+		if u.Scheme != "https" {
+			return fmt.Errorf("APIBase %q must use https scheme", cfg.APIBase)
+		}
+		if u.Host == "" {
+			return fmt.Errorf("APIBase %q must have a host", cfg.APIBase)
+		}
+		if u.User != nil {
+			return fmt.Errorf("APIBase %q must not contain user credentials", cfg.APIBase)
+		}
+		// Normalize: remove trailing slash
+		cfg.APIBase = strings.TrimRight(u.String(), "/")
+	}
+	return nil
+}
+
+// repositoryPattern validates GitHub repository format (owner/repo)
+var repositoryPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9-]*\/[a-zA-Z0-9_\-\.]+$`)
 
 // ChannelConfig represents the configuration for an update channel.
 type ChannelConfig struct {
@@ -132,18 +185,19 @@ type Manager struct {
 // settings file exists yet — see SetAutoCheck's doc comment for the
 // disclosure that default requires.
 func NewManager(currentVersion, downloadDir, settingsPath string) *Manager {
-	return NewManagerWithConfig(UpdateConfig{
+	m, _ := NewManagerWithConfig(UpdateConfig{
 		CurrentVersion: currentVersion,
 		DownloadDir:    downloadDir,
 		SettingsPath:   settingsPath,
 		Channel:        DefaultStableChannelConfig(),
 	})
+	return m
 }
 
 // NewManagerWithConfig builds a Manager with explicit configuration.
 // This allows v1.5+ to use a configurable update channel while maintaining
 // backward compatibility with v1.4's hardcoded defaults.
-func NewManagerWithConfig(config UpdateConfig) *Manager {
+func NewManagerWithConfig(config UpdateConfig) (*Manager, error) {
 	if config.HTTPClient == nil {
 		config.HTTPClient = newHTTPClient()
 	}
@@ -155,6 +209,11 @@ func NewManagerWithConfig(config UpdateConfig) *Manager {
 	}
 	if config.UserAgent == "" {
 		config.UserAgent = "TRAZIP/" + config.CurrentVersion
+	}
+
+	// Validate the channel configuration before creating the manager
+	if err := validateChannelConfig(config.Channel); err != nil {
+		return nil, fmt.Errorf("invalid channel configuration: %w", err)
 	}
 
 	m := &Manager{
@@ -194,7 +253,7 @@ func NewManagerWithConfig(config UpdateConfig) *Manager {
 		// no Channel field, so s.Channel will be empty — no migration needed.
 		// If a future version adds a channel field, this logic will handle it.
 	}
-	return m
+	return m, nil
 }
 
 // ChannelConfig returns the current channel configuration.
