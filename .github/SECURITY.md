@@ -15,7 +15,6 @@
 Please report suspected security vulnerabilities privately via:
 
 - **GitHub Security Advisories** (preferred): Use the "Report a vulnerability" tab in the Security section of this repository
-- **Email**: security@trazip.io (if available)
 
 Include as much detail as possible:
 
