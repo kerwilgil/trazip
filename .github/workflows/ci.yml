@@ -234,14 +234,14 @@ jobs:
         run: npx @cyclonedx/cdxgen@latest -o ../sbom-npm.json
 
       - name: Upload Go SBOM
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sbom-go
           path: sbom-go.json
           retention-days: 30
 
       - name: Upload npm SBOM
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sbom-npm
           path: sbom-npm.json
@@ -283,7 +283,7 @@ jobs:
         run: go build -o trazip.exe .
 
       - name: Upload Windows binary
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: trazip-windows
           path: trazip.exe
@@ -325,7 +325,7 @@ jobs:
         run: CGO_ENABLED=1 go build -o trazip .
 
       - name: Upload Linux binary
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: trazip-linux
           path: trazip
@@ -367,7 +367,7 @@ jobs:
         run: CGO_ENABLED=1 go build -o trazip .
 
       - name: Upload macOS binary
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: trazip-macos
           path: trazip
