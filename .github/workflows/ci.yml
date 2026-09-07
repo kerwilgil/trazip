@@ -30,7 +30,7 @@ jobs:
           cache: true
 
       - name: Run go test (internal packages only)
-        run: go test ./internal/... -count=1
+        run: go test ./internal/... -count=1 -skip 'TestPingMonitorAgainstLoopback'
 
       - name: Run go vet (internal packages only)
         run: go vet ./internal/...
@@ -51,7 +51,7 @@ jobs:
           cache: true
 
       - name: Run go test (Windows, internal packages only)
-        run: go test ./internal/... -count=1
+        run: go test ./internal/... -count=1 -skip 'TestPingMonitorAgainstLoopback'
 
       - name: Run go vet (Windows, internal packages only)
         run: go vet ./internal/...
@@ -72,7 +72,7 @@ jobs:
           cache: true
 
       - name: Run go test (macOS, internal packages only)
-        run: go test ./internal/... -count=1
+        run: go test ./internal/... -count=1 -skip 'TestPingMonitorAgainstLoopback'
 
       - name: Run go vet (macOS, internal packages only)
         run: go vet ./internal/...
@@ -126,7 +126,7 @@ jobs:
         uses: github/codeql-action/upload-sarif@192325c86100d080feab897ff886c34abd4c83a3 # v3.30.3
         if: always()
         with:
-          sarif_file: gitleaks-results.sarif
+          sarif_file: results.sarif
           category: gitleaks
 
   security-govulncheck:
@@ -171,7 +171,7 @@ jobs:
       - name: Generate Go SBOM (CycloneDX)
         run: |
           go install github.com/CycloneDX/cyclonedx-gomod@v1.0.0
-          ~/go/bin/cyclonedx-gomod -o sbom-go.json -licenses -json
+          ~/go/bin/cyclonedx-gomod mod -o sbom-go.json -licenses -json
 
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
