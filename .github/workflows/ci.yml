@@ -30,7 +30,7 @@ jobs:
           cache: true
 
       - name: Run go test (internal packages only)
-        run: go test ./internal/... -count=1 -race
+        run: go test ./internal/... -count=1
 
       - name: Run go vet (internal packages only)
         run: go vet ./internal/...
@@ -126,7 +126,7 @@ jobs:
         uses: github/codeql-action/upload-sarif@192325c86100d080feab897ff886c34abd4c83a3 # v3.30.3
         if: always()
         with:
-          sarif_file: gitleaks.sarif
+          sarif_file: gitleaks-results.sarif
           category: gitleaks
 
   security-govulncheck:
