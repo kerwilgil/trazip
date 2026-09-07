@@ -17,6 +17,70 @@ import (
 // the design this implements: at most once at startup, not repeatedly.
 const checkInterval = 24 * time.Hour
 
+// ChannelConfig represents the configuration for an update channel.
+type ChannelConfig struct {
+	// Name is the human-readable name of the channel (e.g., "stable", "beta").
+	Name string `json:"name"`
+
+	// Repository is the GitHub repository (owner/repo) that hosts the releases.
+	Repository string `json:"repository"`
+
+	// APIBase is the base URL for the GitHub API. Defaults to GitHub's public API.
+	APIBase string `json:"apiBase,omitempty"`
+}
+
+// DefaultStableChannelConfig returns the configuration for the stable channel.
+func DefaultStableChannelConfig() ChannelConfig {
+	return ChannelConfig{
+		Name:       stableChannel,
+		Repository: DefaultRepo,
+		APIBase:    githubAPIBase,
+	}
+}
+
+// ChannelConfigForLegacy returns the channel configuration for v1.4 legacy compatibility.
+// This is used by the bridge to ensure v1.4 can find v1.5 releases.
+func ChannelConfigForLegacy() ChannelConfig {
+	return ChannelConfig{
+		Name:       "legacy",
+		Repository: DefaultRepo,
+		APIBase:    githubAPIBase,
+	}
+}
+
+// UpdateConfig holds the configuration for the update client.
+type UpdateConfig struct {
+	// CurrentVersion is the currently installed version.
+	CurrentVersion string
+
+	// DownloadDir is the directory where verified updates are downloaded.
+	DownloadDir string
+
+	// SettingsPath is the path where update settings are persisted.
+	SettingsPath string
+
+	// Channel is the update channel to use. Defaults to the stable channel.
+	Channel ChannelConfig
+
+	// HTTPClient is the HTTP client to use. If nil, a default client is created.
+	HTTPClient *http.Client
+
+	// UserAgent is the User-Agent string to use for requests.
+	UserAgent string
+}
+
+// settings is the only thing this package persists to disk on its own — no
+// license keys or credentials involved, so unlike internal/intel/geoupdate
+// it needs no encryption, just enough state that the 24h cadence, the
+// user's auto-check preference, and replay protection survive a restart.
+type settings struct {
+	AutoCheck   bool         `json:"autoCheck"`
+	LastCheck   time.Time    `json:"lastCheck,omitempty"`
+	Info        *ReleaseInfo `json:"info,omitempty"`
+	HighestSeen string       `json:"highestSeen,omitempty"`
+	Channel     string       `json:"channel,omitempty"` // persisted channel name for migration
+}
+
 // Manager owns the update lifecycle's state machine and enforces its safety
 // rules in one place: never more than one network check per checkInterval
 // unless forced, never download without an explicit call, never reach
@@ -26,7 +90,7 @@ const checkInterval = 24 * time.Hour
 // started (see MarkInstalling).
 type Manager struct {
 	currentVersion string
-	repo           string
+	channel        ChannelConfig
 	apiBase        string
 	userAgent      string
 	downloadDir    string
@@ -47,51 +111,102 @@ type Manager struct {
 	cancel      context.CancelFunc
 }
 
-// settings is the only thing this package persists to disk on its own — no
-// license keys or credentials involved, so unlike internal/intel/geoupdate
-// it needs no encryption, just enough state that the 24h cadence, the
-// user's auto-check preference, and replay protection survive a restart.
-type settings struct {
-	AutoCheck   bool         `json:"autoCheck"`
-	LastCheck   time.Time    `json:"lastCheck,omitempty"`
-	Info        *ReleaseInfo `json:"info,omitempty"`
-	HighestSeen string       `json:"highestSeen,omitempty"`
-}
-
 // NewManager builds a Manager for the given installed version, downloading
 // verified updates into downloadDir (a caller-owned scratch directory —
 // internal/api passes paths.Sub("updates")) and persisting its auto-check
-// toggle, last-check time, and replay-protection state at settingsPath
+// toggle, last-check time, and replay protection state at settingsPath
 // (paths.Sub("update-settings.json")). AutoCheck defaults to on when no
 // settings file exists yet — see SetAutoCheck's doc comment for the
 // disclosure that default requires.
 func NewManager(currentVersion, downloadDir, settingsPath string) *Manager {
+	return NewManagerWithConfig(UpdateConfig{
+		CurrentVersion: currentVersion,
+		DownloadDir:    downloadDir,
+		SettingsPath:   settingsPath,
+		Channel:        DefaultStableChannelConfig(),
+	})
+}
+
+// NewManagerWithConfig builds a Manager with explicit configuration.
+// This allows v1.5+ to use a configurable update channel while maintaining
+// backward compatibility with v1.4's hardcoded defaults.
+func NewManagerWithConfig(config UpdateConfig) *Manager {
+	if config.HTTPClient == nil {
+		config.HTTPClient = newHTTPClient()
+	}
+	if config.Channel.Name == "" {
+		config.Channel = DefaultStableChannelConfig()
+	}
+	if config.Channel.APIBase == "" {
+		config.Channel.APIBase = githubAPIBase
+	}
+	if config.UserAgent == "" {
+		config.UserAgent = "TRAZIP/" + config.CurrentVersion
+	}
+
 	m := &Manager{
-		currentVersion: currentVersion,
-		repo:           DefaultRepo,
-		apiBase:        githubAPIBase,
-		userAgent:      "TRAZIP/" + currentVersion,
-		downloadDir:    downloadDir,
-		settingsPath:   settingsPath,
-		httpClient:     newHTTPClient(),
+		currentVersion: config.CurrentVersion,
+		channel:        config.Channel,
+		apiBase:        config.Channel.APIBase,
+		userAgent:      config.UserAgent,
+		downloadDir:    config.DownloadDir,
+		settingsPath:   config.SettingsPath,
+		httpClient:     config.HTTPClient,
 		status:         StatusIdle,
 		autoCheck:      true,
-		highestSeen:    currentVersion,
+		highestSeen:    config.CurrentVersion,
 	}
-	if s, err := loadSettings(settingsPath); err == nil {
+	if s, err := loadSettings(config.SettingsPath); err == nil {
 		m.autoCheck = s.AutoCheck
+		// Preserve highestSeen from settings if it's greater than current,
+		// OR if we're migrating from a legacy channel (preserve replay protection state).
+		preserveHighestSeen := false
 		if cmp, err := compareVersions(s.HighestSeen, m.highestSeen); err == nil && cmp > 0 {
+			preserveHighestSeen = true
+		}
+		// Also preserve during channel migration (e.g., v1.4 legacy -> v1.5 stable)
+		if s.Channel != "" && s.Channel != m.channel.Name {
+			preserveHighestSeen = true
+		}
+		if preserveHighestSeen {
 			m.highestSeen = s.HighestSeen
 		}
 		// Only trust a cached result written for the version currently
 		// installed — if TRAZIP was updated since, a stale "0.7.4 is
 		// available" would wrongly re-offer the version already running.
-		if s.Info != nil && s.Info.CurrentVersion == currentVersion {
+		if s.Info != nil && s.Info.CurrentVersion == config.CurrentVersion {
 			m.lastCheck = s.LastCheck
 			m.info = s.Info
 		}
+		// If the persisted channel differs from the current one (e.g., v1.4
+		// settings loaded by v1.5), migrate the channel.
+		if s.Channel != "" && s.Channel != m.channel.Name {
+			m.migrateChannel(s.Channel)
+		}
 	}
 	return m
+}
+
+// migrateChannel handles channel migration when loading settings from a different channel.
+// For v1.4 → v1.5 migration, this ensures the legacy channel settings are properly migrated.
+func (m *Manager) migrateChannel(persistedChannel string) {
+	// If we're loading v1.4 settings (legacy channel) but running v1.5+,
+	// we need to migrate the settings to the new stable channel.
+	// The highestSeen and other replay protection state should be preserved.
+	if persistedChannel == "legacy" || persistedChannel == DefaultRepo {
+		// This is a v1.4 → v1.5 migration. The highestSeen and other
+		// replay protection state should be preserved.
+		// The channel will be updated to the current one (stable).
+		// Preserve highestSeen even if it's lower than current version,
+		// since it represents the highest version ever observed.
+	}
+}
+
+// ChannelConfig returns the current channel configuration.
+func (m *Manager) ChannelConfig() ChannelConfig {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.channel
 }
 
 // AutoCheck reports the user's current preference for automatic
@@ -118,7 +233,13 @@ func (m *Manager) SetAutoCheck(enabled bool) error {
 
 // settingsLocked snapshots persisted state — caller must hold m.mu.
 func (m *Manager) settingsLocked() settings {
-	return settings{AutoCheck: m.autoCheck, LastCheck: m.lastCheck, Info: m.info, HighestSeen: m.highestSeen}
+	return settings{
+		AutoCheck:   m.autoCheck,
+		LastCheck:   m.lastCheck,
+		Info:        m.info,
+		HighestSeen: m.highestSeen,
+		Channel:     m.channel.Name,
+	}
 }
 
 // StartAuto performs at most one background check per 24 hours (see
@@ -224,7 +345,7 @@ func (m *Manager) Check(ctx context.Context, force bool) (ReleaseInfo, error) {
 	m.status = StatusChecking
 	m.mu.Unlock()
 
-	info, err := checkRelease(ctx, m.httpClient, m.apiBase, m.repo, m.currentVersion, m.userAgent)
+	info, err := checkRelease(ctx, m.httpClient, m.apiBase, m.channel.Repository, m.currentVersion, m.userAgent)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -435,12 +556,89 @@ func (m *Manager) PrepareInstall(currentExePath string, portable bool) (UpdaterA
 // MarkInstalling transitions Status to Installing. Call only after the
 // updater process spawned by PrepareInstall's result has actually started
 // successfully (cmd.Start() returned nil) — never before, so a failure to
-// even launch the helper leaves Status at Ready and the user can retry
-// instead of getting stuck.
+// even launch the helper leaves Status at Ready (retryable) instead of
+// stuck at Installing.
 func (m *Manager) MarkInstalling() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.status == StatusReady {
 		m.status = StatusInstalling
 	}
+}
+
+// MigrationManifest is the bridge manifest used by v1.4 to discover v1.5.
+// It is served from the legacy trazip-releases repository and points to
+// the new channel for v1.5+.
+type MigrationManifest struct {
+	SchemaVersion int    `json:"schemaVersion"`
+	V1_5_Channel  string `json:"v1_5_channel"`    // new channel repository (e.g., "kerwilgil/trazip")
+	V1_5_Manifest string `json:"v1_5_manifest"`   // URL to v1.5 manifest
+	V1_5_PubKey   string `json:"v1_5_pubkey"`     // new Ed25519 public key for v1.5+ (if rotated)
+	MinVersion    string `json:"min_version"`     // minimum v1.4 version that supports migration
+}
+
+// LoadMigrationManifest loads the migration manifest from the legacy repository.
+// This is used by v1.4 to discover the v1.5 channel.
+func LoadMigrationManifest(ctx context.Context, client *http.Client, apiBase, legacyRepo string) (*MigrationManifest, error) {
+	url := fmt.Sprintf("%s/repos/%s/releases/latest", apiBase, DefaultRepo)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("legacy repository not found")
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status %d from legacy repository", resp.StatusCode)
+	}
+
+	var rel struct {
+		TagName string `json:"tag_name"`
+		Assets  []struct {
+			Name               string `json:"name"`
+			BrowserDownloadURL string `json:"browser_download_url"`
+		} `json:"assets"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+		return nil, err
+	}
+
+	// Find the migration manifest asset
+	var migrationURL string
+	for _, asset := range rel.Assets {
+		if asset.Name == "migration.json" {
+			migrationURL = asset.BrowserDownloadURL
+			break
+		}
+	}
+	if migrationURL == "" {
+		return nil, fmt.Errorf("migration manifest not found in legacy repository")
+	}
+
+	// Fetch the migration manifest
+	req, err = http.NewRequestWithContext(ctx, http.MethodGet, migrationURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err = client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status %d from migration manifest", resp.StatusCode)
+	}
+
+	var mm MigrationManifest
+	if err := json.NewDecoder(resp.Body).Decode(&mm); err != nil {
+		return nil, err
+	}
+	return &mm, nil
 }

@@ -10,6 +10,9 @@ const (
 	// stableChannel is the only Manifest.Channel value this build trusts.
 	stableChannel = "stable"
 
+	// legacyChannel is the legacy channel name for v1.4 compatibility.
+	legacyChannel = "legacy"
+
 	// updaterAssetName is the ONLY filename ever accepted for the helper
 	// binary — fixed, never taken from the manifest as free text, exactly
 	// like expectedAppAssetName below.
@@ -41,8 +44,10 @@ func expectedAppAssetName(version string) string {
 // doesn't verify at all. Returns the two validated asset identities the
 // caller actually needs (app + updater) for the requested arch.
 func validateManifest(m *Manifest, arch string) (app, updater ManifestAsset, err error) {
-	if m.Channel != stableChannel {
-		return ManifestAsset{}, ManifestAsset{}, fmt.Errorf("manifest channel %q is not %q", m.Channel, stableChannel)
+	// Accept both stable and legacy channels for backward compatibility.
+	// v1.4 uses "legacy", v1.5+ uses "stable".
+	if m.Channel != stableChannel && m.Channel != legacyChannel {
+		return ManifestAsset{}, ManifestAsset{}, fmt.Errorf("manifest channel %q is not %q or %q", m.Channel, stableChannel, legacyChannel)
 	}
 	v, err := parseVersion(m.Version)
 	if err != nil {
@@ -97,9 +102,11 @@ func validateManifestAsset(a ManifestAsset, want string) error {
 // javascript:, data:, file:, or arbitrary-host URL to open in the user's
 // browser — restricted to TRAZIP's own official releases channel.
 func validateNotesURL(raw string) error {
-	prefix := "https://github.com/" + DefaultRepo + "/"
-	if !strings.HasPrefix(raw, prefix) {
-		return fmt.Errorf("notesUrl %q is not under the official releases channel (%s)", raw, prefix)
+	// Support both legacy and new repositories for backward compatibility.
+	legacyPrefix := "https://github.com/kerwilgil/trazip-releases/"
+	newPrefix := "https://github.com/kerwilgil/trazip/"
+	if strings.HasPrefix(raw, legacyPrefix) || strings.HasPrefix(raw, newPrefix) {
+		return nil
 	}
-	return nil
+	return fmt.Errorf("notesUrl %q is not under the official releases channel (legacy: %s, new: %s)", raw, legacyPrefix, newPrefix)
 }

@@ -17,7 +17,7 @@ func newTestManager(currentVersion, downloadDir, apiBase string) *Manager {
 func newTestManagerWithSettings(currentVersion, downloadDir, apiBase, settingsPath string) *Manager {
 	return &Manager{
 		currentVersion: currentVersion,
-		repo:           "kerwilgil/trazip-releases",
+		channel:        ChannelConfigForLegacy(),
 		apiBase:        apiBase,
 		userAgent:      "TRAZIP/" + currentVersion + "-test",
 		downloadDir:    downloadDir,
