@@ -12,14 +12,23 @@ import (
 	"time"
 )
 
-// checkInterval bounds how often Check actually hits the network unless the
-// caller forces it (the user pressing "Buscar actualizaciones") — see §7 of
-// the design this implements: at most once at startup, not repeatedly.
-const checkInterval = 24 * time.Hour
+const (
+	// checkInterval bounds how often Check actually hits the network unless the
+	// caller forces it (the user pressing "Buscar actualizaciones") — see §7 of
+	// the design this implements: at most once at startup, not repeatedly.
+	checkInterval = 24 * time.Hour
+
+	// LegacyReleaseRepo is the v1.4 distribution channel — kept for bridge
+	// compatibility only. v1.5+ uses StableReleaseRepo.
+	LegacyReleaseRepo = "kerwilgil/trazip-releases"
+
+	// StableReleaseRepo is the v1.5+ official distribution channel.
+	StableReleaseRepo = "kerwilgil/trazip"
+)
 
 // ChannelConfig represents the configuration for an update channel.
 type ChannelConfig struct {
-	// Name is the human-readable name of the channel (e.g., "stable", "beta").
+	// Name is the human-readable name of the channel (always "stable" for now).
 	Name string `json:"name"`
 
 	// Repository is the GitHub repository (owner/repo) that hosts the releases.
@@ -30,20 +39,22 @@ type ChannelConfig struct {
 }
 
 // DefaultStableChannelConfig returns the configuration for the stable channel.
+// This is the v1.5+ official channel pointing to the new repository.
 func DefaultStableChannelConfig() ChannelConfig {
 	return ChannelConfig{
 		Name:       stableChannel,
-		Repository: DefaultRepo,
+		Repository: StableReleaseRepo,
 		APIBase:    githubAPIBase,
 	}
 }
 
-// ChannelConfigForLegacy returns the channel configuration for v1.4 legacy compatibility.
-// This is used by the bridge to ensure v1.4 can find v1.5 releases.
+// ChannelConfigForLegacy returns the channel configuration for v1.4 bridge compatibility.
+// This is used only for bridge testing and v1.4 compatibility testing.
+// The bridge release published in trazip-releases must use this repository.
 func ChannelConfigForLegacy() ChannelConfig {
 	return ChannelConfig{
-		Name:       "legacy",
-		Repository: DefaultRepo,
+		Name:       stableChannel, // v1.4 only accepts "stable"
+		Repository: LegacyReleaseRepo,
 		APIBase:    githubAPIBase,
 	}
 }
@@ -78,7 +89,9 @@ type settings struct {
 	LastCheck   time.Time    `json:"lastCheck,omitempty"`
 	Info        *ReleaseInfo `json:"info,omitempty"`
 	HighestSeen string       `json:"highestSeen,omitempty"`
-	Channel     string       `json:"channel,omitempty"` // persisted channel name for migration
+	// Note: Channel field is not present in v1.4 settings. It is added by v1.5+.
+	// v1.4 settings files will not have this field and will be handled gracefully.
+	Channel string `json:"channel,omitempty"`
 }
 
 // Manager owns the update lifecycle's state machine and enforces its safety
@@ -164,10 +177,8 @@ func NewManagerWithConfig(config UpdateConfig) *Manager {
 		if cmp, err := compareVersions(s.HighestSeen, m.highestSeen); err == nil && cmp > 0 {
 			preserveHighestSeen = true
 		}
-		// Also preserve during channel migration (e.g., v1.4 legacy -> v1.5 stable)
-		if s.Channel != "" && s.Channel != m.channel.Name {
-			preserveHighestSeen = true
-		}
+		// Do NOT preserve highestSeen if it's lower than currentVersion —
+		// the floor must never be lowered (replay protection invariant).
 		if preserveHighestSeen {
 			m.highestSeen = s.HighestSeen
 		}
@@ -179,27 +190,11 @@ func NewManagerWithConfig(config UpdateConfig) *Manager {
 			m.info = s.Info
 		}
 		// If the persisted channel differs from the current one (e.g., v1.4
-		// settings loaded by v1.5), migrate the channel.
-		if s.Channel != "" && s.Channel != m.channel.Name {
-			m.migrateChannel(s.Channel)
-		}
+		// settings loaded by v1.5), migrate the channel. v1.4 settings have
+		// no Channel field, so s.Channel will be empty — no migration needed.
+		// If a future version adds a channel field, this logic will handle it.
 	}
 	return m
-}
-
-// migrateChannel handles channel migration when loading settings from a different channel.
-// For v1.4 → v1.5 migration, this ensures the legacy channel settings are properly migrated.
-func (m *Manager) migrateChannel(persistedChannel string) {
-	// If we're loading v1.4 settings (legacy channel) but running v1.5+,
-	// we need to migrate the settings to the new stable channel.
-	// The highestSeen and other replay protection state should be preserved.
-	if persistedChannel == "legacy" || persistedChannel == DefaultRepo {
-		// This is a v1.4 → v1.5 migration. The highestSeen and other
-		// replay protection state should be preserved.
-		// The channel will be updated to the current one (stable).
-		// Preserve highestSeen even if it's lower than current version,
-		// since it represents the highest version ever observed.
-	}
 }
 
 // ChannelConfig returns the current channel configuration.
@@ -564,81 +559,4 @@ func (m *Manager) MarkInstalling() {
 	if m.status == StatusReady {
 		m.status = StatusInstalling
 	}
-}
-
-// MigrationManifest is the bridge manifest used by v1.4 to discover v1.5.
-// It is served from the legacy trazip-releases repository and points to
-// the new channel for v1.5+.
-type MigrationManifest struct {
-	SchemaVersion int    `json:"schemaVersion"`
-	V1_5_Channel  string `json:"v1_5_channel"`    // new channel repository (e.g., "kerwilgil/trazip")
-	V1_5_Manifest string `json:"v1_5_manifest"`   // URL to v1.5 manifest
-	V1_5_PubKey   string `json:"v1_5_pubkey"`     // new Ed25519 public key for v1.5+ (if rotated)
-	MinVersion    string `json:"min_version"`     // minimum v1.4 version that supports migration
-}
-
-// LoadMigrationManifest loads the migration manifest from the legacy repository.
-// This is used by v1.4 to discover the v1.5 channel.
-func LoadMigrationManifest(ctx context.Context, client *http.Client, apiBase, legacyRepo string) (*MigrationManifest, error) {
-	url := fmt.Sprintf("%s/repos/%s/releases/latest", apiBase, DefaultRepo)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, fmt.Errorf("legacy repository not found")
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status %d from legacy repository", resp.StatusCode)
-	}
-
-	var rel struct {
-		TagName string `json:"tag_name"`
-		Assets  []struct {
-			Name               string `json:"name"`
-			BrowserDownloadURL string `json:"browser_download_url"`
-		} `json:"assets"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
-		return nil, err
-	}
-
-	// Find the migration manifest asset
-	var migrationURL string
-	for _, asset := range rel.Assets {
-		if asset.Name == "migration.json" {
-			migrationURL = asset.BrowserDownloadURL
-			break
-		}
-	}
-	if migrationURL == "" {
-		return nil, fmt.Errorf("migration manifest not found in legacy repository")
-	}
-
-	// Fetch the migration manifest
-	req, err = http.NewRequestWithContext(ctx, http.MethodGet, migrationURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err = client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status %d from migration manifest", resp.StatusCode)
-	}
-
-	var mm MigrationManifest
-	if err := json.NewDecoder(resp.Body).Decode(&mm); err != nil {
-		return nil, err
-	}
-	return &mm, nil
 }

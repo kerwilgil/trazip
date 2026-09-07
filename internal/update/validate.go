@@ -2,6 +2,7 @@ package update
 
 import (
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 )
@@ -9,9 +10,6 @@ import (
 const (
 	// stableChannel is the only Manifest.Channel value this build trusts.
 	stableChannel = "stable"
-
-	// legacyChannel is the legacy channel name for v1.4 compatibility.
-	legacyChannel = "legacy"
 
 	// updaterAssetName is the ONLY filename ever accepted for the helper
 	// binary — fixed, never taken from the manifest as free text, exactly
@@ -44,10 +42,8 @@ func expectedAppAssetName(version string) string {
 // doesn't verify at all. Returns the two validated asset identities the
 // caller actually needs (app + updater) for the requested arch.
 func validateManifest(m *Manifest, arch string) (app, updater ManifestAsset, err error) {
-	// Accept both stable and legacy channels for backward compatibility.
-	// v1.4 uses "legacy", v1.5+ uses "stable".
-	if m.Channel != stableChannel && m.Channel != legacyChannel {
-		return ManifestAsset{}, ManifestAsset{}, fmt.Errorf("manifest channel %q is not %q or %q", m.Channel, stableChannel, legacyChannel)
+	if m.Channel != stableChannel {
+		return ManifestAsset{}, ManifestAsset{}, fmt.Errorf("manifest channel %q is not %q", m.Channel, stableChannel)
 	}
 	v, err := parseVersion(m.Version)
 	if err != nil {
@@ -102,11 +98,20 @@ func validateManifestAsset(a ManifestAsset, want string) error {
 // javascript:, data:, file:, or arbitrary-host URL to open in the user's
 // browser — restricted to TRAZIP's own official releases channel.
 func validateNotesURL(raw string) error {
-	// Support both legacy and new repositories for backward compatibility.
-	legacyPrefix := "https://github.com/kerwilgil/trazip-releases/"
-	newPrefix := "https://github.com/kerwilgil/trazip/"
-	if strings.HasPrefix(raw, legacyPrefix) || strings.HasPrefix(raw, newPrefix) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("notesUrl %q is not a valid URL: %w", raw, err)
+	}
+	if u.Scheme != "https" {
+		return fmt.Errorf("notesUrl %q must use https", raw)
+	}
+	if u.Host != "github.com" {
+		return fmt.Errorf("notesUrl %q must be on github.com", raw)
+	}
+	// Accept both legacy and new repository URLs for backward compatibility.
+	if strings.HasPrefix(u.Path, "/kerwilgil/trazip-releases/") ||
+		strings.HasPrefix(u.Path, "/kerwilgil/trazip/") {
 		return nil
 	}
-	return fmt.Errorf("notesUrl %q is not under the official releases channel (legacy: %s, new: %s)", raw, legacyPrefix, newPrefix)
+	return fmt.Errorf("notesUrl %q is not under the official releases channel (legacy: /kerwilgil/trazip-releases/, new: /kerwilgil/trazip/)", raw)
 }

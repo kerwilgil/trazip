@@ -709,9 +709,8 @@ func TestManagerAcceptsGenuineNewerReleaseAboveHighestSeen(t *testing.T) {
 	// A genuinely NEWER release than anything seen so far must still be
 	// accepted — replay protection must never become a one-way ratchet
 	// that blocks real progress.
-	m2 := NewManager("0.7.4", t.TempDir(), settingsPath)
 	fx2 := newFullReleaseFixture(t, "0.7.6")
-	m2.apiBase = fx2.srv.URL
+	m2 := newTestManagerWithSettings("0.7.4", t.TempDir(), fx2.srv.URL, settingsPath)
 	m2.httpClient = newTestHTTPClient() // NewManager's own client won't trust the TLS test fixture's self-signed cert
 
 	info, err := m2.Check(context.Background(), true)
