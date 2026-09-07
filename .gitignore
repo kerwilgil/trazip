@@ -57,3 +57,12 @@ credentials*
 secrets*
 *license-key*
 *license_key*
+
+# Local development artifacts
+.claude/
+.playwright-cli/
+BGP_INTELLIGENCE_ROADMAP.md
+CONTEXT-trazip.md
+TRAZIP_prompt_maestro.md
+docs/releases/
+gitleaks-report.json
