@@ -2,6 +2,8 @@ module trazip
 
 go 1.26.0
 
+toolchain go1.26.6
+
 require (
 	codeberg.org/miekg/dns v0.6.84
 	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3
@@ -12,7 +14,7 @@ require (
 	github.com/nyaruka/phonenumbers v1.8.1
 	github.com/oschwald/maxminddb-golang/v2 v2.4.1
 	github.com/wailsapp/wails/v2 v2.13.0
-	golang.org/x/net v0.55.0
+	golang.org/x/net v0.56.0
 	golang.org/x/sys v0.46.0
 )
 
@@ -38,8 +40,8 @@ require (
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	github.com/wailsapp/go-webview2 v1.0.22 // indirect
 	github.com/wailsapp/mimetype v1.4.1 // indirect
-	golang.org/x/crypto v0.51.0 // indirect
-	golang.org/x/text v0.37.0 // indirect
+	golang.org/x/crypto v0.53.0 // indirect
+	golang.org/x/text v0.38.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
 
