@@ -70,10 +70,22 @@ func validateChannelConfig(cfg ChannelConfig) error {
 		if u.User != nil {
 			return fmt.Errorf("APIBase %q must not contain user credentials", cfg.APIBase)
 		}
-		// Normalize: remove trailing slash
-		cfg.APIBase = strings.TrimRight(u.String(), "/")
 	}
 	return nil
+}
+
+// normalizeChannelConfig normalizes a ChannelConfig for production use.
+// Returns the normalized config or an error if invalid.
+func normalizeChannelConfig(cfg ChannelConfig) (ChannelConfig, error) {
+	if err := validateChannelConfig(cfg); err != nil {
+		return ChannelConfig{}, err
+	}
+	// Normalize APIBase: remove trailing slash
+	if cfg.APIBase != "" {
+		u, _ := url.Parse(cfg.APIBase)
+		cfg.APIBase = strings.TrimRight(u.String(), "/")
+	}
+	return cfg, nil
 }
 
 // repositoryPattern validates GitHub repository format (owner/repo)
@@ -211,15 +223,16 @@ func NewManagerWithConfig(config UpdateConfig) (*Manager, error) {
 		config.UserAgent = "TRAZIP/" + config.CurrentVersion
 	}
 
-	// Validate the channel configuration before creating the manager
-	if err := validateChannelConfig(config.Channel); err != nil {
+	// Normalize and validate the channel configuration before creating the manager
+	normalizedChannel, err := normalizeChannelConfig(config.Channel)
+	if err != nil {
 		return nil, fmt.Errorf("invalid channel configuration: %w", err)
 	}
 
 	m := &Manager{
 		currentVersion: config.CurrentVersion,
-		channel:        config.Channel,
-		apiBase:        config.Channel.APIBase,
+		channel:        normalizedChannel,
+		apiBase:        normalizedChannel.APIBase,
 		userAgent:      config.UserAgent,
 		downloadDir:    config.DownloadDir,
 		settingsPath:   config.SettingsPath,

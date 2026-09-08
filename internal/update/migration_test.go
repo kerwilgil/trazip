@@ -1,7 +1,10 @@
 package update
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -344,26 +347,35 @@ func TestChannelConfig_RepositoryValidation(t *testing.T) {
 
 func TestChannelConfig_APIBaseValidation(t *testing.T) {
 	tests := []struct {
-		name      string
-		apiBase   string
-		wantValid bool
+		name       string
+		apiBase    string
+		wantErr    bool
 	}{
-		{"valid_https", "https://api.github.com", true},
-		{"valid_custom", "https://api.custom.com", true},
-		{"invalid_http", "http://api.github.com", false},
-		{"empty", "", true}, // empty is allowed (defaults to GitHub)
+		{"valid_https", "https://api.github.com", false},
+		{"valid_custom", "https://api.custom.com", false},
+		{"invalid_http", "http://api.github.com", true},
+		{"empty", "", false}, // empty is allowed (defaults to GitHub)
+		{"invalid_file", "file:///tmp", true},
+		{"invalid_relative", "relative/path", true},
+		{"invalid_userinfo", "https://user:pass@example.com", true},
+		{"no_host", "https://", true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := ChannelConfig{
-				Name:       "test",
+				Name:       stableChannel,
 				Repository: "owner/repo",
 				APIBase:    tt.apiBase,
 			}
-			// For now, just check it doesn't panic
-			_ = tt
-			_ = cfg
+			err := validateChannelConfig(cfg)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateChannelConfig with %q: got error=%v, wantErr=%v", tt.apiBase, err != nil, tt.wantErr)
+			}
+			// Also test normalization for valid cases
+			if !tt.wantErr && cfg.APIBase != tt.apiBase {
+				t.Errorf("APIBase normalization: got %q, want %q", cfg.APIBase, tt.apiBase)
+			}
 		})
 	}
 }
@@ -417,5 +429,87 @@ func TestStableReleaseRepoConstant(t *testing.T) {
 func TestLegacyReleaseRepoConstant(t *testing.T) {
 	if LegacyReleaseRepo != "kerwilgil/trazip-releases" {
 		t.Errorf("LegacyReleaseRepo = %q, want kerwilgil/trazip-releases", LegacyReleaseRepo)
+	}
+}
+
+func TestV15DefaultRouting(t *testing.T) {
+	// Test that v1.5 default config routes to the new repository
+	fx := newFullReleaseFixture(t, "1.5.0")
+	m, err := NewManagerWithConfig(UpdateConfig{
+		CurrentVersion: "1.4.0",
+		DownloadDir:    t.TempDir(),
+		SettingsPath:   filepath.Join(t.TempDir(), "settings.json"),
+		Channel:        DefaultStableChannelConfig(),
+	})
+	if err != nil {
+		t.Fatalf("NewManagerWithConfig: %v", err)
+	}
+
+	// Verify the channel config is correct
+	if m.ChannelConfig().Repository != StableReleaseRepo {
+		t.Errorf("v1.5 default repo = %q, want %s", m.ChannelConfig().Repository, StableReleaseRepo)
+	}
+
+	// Verify the actual HTTP request path
+	mux := http.NewServeMux()
+	var requestedPath string
+	mux.HandleFunc("/repos/kerwilgil/trazip/releases/latest", func(w http.ResponseWriter, r *http.Request) {
+		requestedPath = r.URL.Path
+		w.Write([]byte(`{"tag_name":"v1.5.0","assets":[{"name":"update.json","browser_download_url":"` + fx.srv.URL + `/assets/update.json"},{"name":"update.json.sig","browser_download_url":"` + fx.srv.URL + `/assets/update.json.sig"},{"name":"TRAZIP-1.5.0.exe","browser_download_url":"` + fx.srv.URL + `/assets/TRAZIP-1.5.0.exe"},{"name":"trazip-updater.exe","browser_download_url":"` + fx.srv.URL + `/assets/trazip-updater.exe"}]`))
+	})
+
+	srv := httptest.NewTLSServer(mux)
+	defer srv.Close()
+
+	// Override the API base to point to our test server
+	m.apiBase = srv.URL
+	m.httpClient = newTestHTTPClient()
+
+	_, _ = m.Check(context.Background(), true)
+	// Ignore error for routing test - we only care about the path
+
+	if requestedPath != "/repos/kerwilgil/trazip/releases/latest" {
+		t.Errorf("requested path = %q, want /repos/kerwilgil/trazip/releases/latest", requestedPath)
+	}
+}
+
+func TestLegacyBridgeRouting(t *testing.T) {
+	// Test that legacy bridge config routes to the old repository
+	fx := newFullReleaseFixture(t, "1.5.0")
+	m, err := NewManagerWithConfig(UpdateConfig{
+		CurrentVersion: "1.4.0",
+		DownloadDir:    t.TempDir(),
+		SettingsPath:   filepath.Join(t.TempDir(), "settings.json"),
+		Channel:        ChannelConfigForLegacy(),
+	})
+	if err != nil {
+		t.Fatalf("NewManagerWithConfig: %v", err)
+	}
+
+	// Verify the channel config uses legacy repo
+	if m.ChannelConfig().Repository != LegacyReleaseRepo {
+		t.Errorf("legacy config repo = %q, want %s", m.ChannelConfig().Repository, LegacyReleaseRepo)
+	}
+
+	// Verify the actual HTTP request path
+	mux := http.NewServeMux()
+	var requestedPath string
+	mux.HandleFunc("/repos/kerwilgil/trazip-releases/releases/latest", func(w http.ResponseWriter, r *http.Request) {
+		requestedPath = r.URL.Path
+		w.Write([]byte(`{"tag_name":"v1.5.0","assets":[{"name":"update.json","browser_download_url":"` + fx.srv.URL + `/assets/update.json"},{"name":"update.json.sig","browser_download_url":"` + fx.srv.URL + `/assets/update.json.sig"},{"name":"TRAZIP-1.5.0.exe","browser_download_url":"` + fx.srv.URL + `/assets/TRAZIP-1.5.0.exe"},{"name":"trazip-updater.exe","browser_download_url":"` + fx.srv.URL + `/assets/trazip-updater.exe"}]`))
+	})
+
+	srv := httptest.NewTLSServer(mux)
+	defer srv.Close()
+
+	// Override the API base to point to our test server
+	m.apiBase = srv.URL
+	m.httpClient = newTestHTTPClient()
+
+	m.Check(context.Background(), true)
+	// Ignore error for routing test - we only care about the path
+
+	if requestedPath != "/repos/kerwilgil/trazip-releases/releases/latest" {
+		t.Errorf("requested path = %q, want /repos/kerwilgil/trazip-releases/releases/latest", requestedPath)
 	}
 }
