@@ -250,6 +250,7 @@ func TestValidateNotesURL_AcceptsBothRepositories(t *testing.T) {
 	wrongHost := "https://gitlab.com/kerwilgil/trazip/releases/tag/v1.5.0"
 	pathTraversal := "https://github.com/kerwilgil/trazip-releases.evil/notes"
 	pathTraversal2 := "https://github.com/kerwilgil/trazip.evil/notes"
+	userInfoURL := "https://user:pass@github.com/kerwilgil/trazip/releases/tag/v1.5.0"
 
 	if err := validateNotesURL(legacyURL); err != nil {
 		t.Errorf("validateNotesURL rejected legacy URL: %v", err)
@@ -271,6 +272,11 @@ func TestValidateNotesURL_AcceptsBothRepositories(t *testing.T) {
 	}
 	if err := validateNotesURL(pathTraversal2); err == nil {
 		t.Error("validateNotesURL accepted path traversal (new)")
+	}
+	// Reject userinfo (credentials) in URL
+	userInfoURL = "https://user:pass@github.com/kerwilgil/trazip/releases/tag/v1.5.0"
+	if err := validateNotesURL(userInfoURL); err == nil {
+		t.Error("validateNotesURL accepted userinfo in URL")
 	}
 }
 
@@ -321,25 +327,37 @@ func TestChannelConfig_JSON_MarshalUnmarshal(t *testing.T) {
 
 func TestChannelConfig_RepositoryValidation(t *testing.T) {
 	tests := []struct {
-		name      string
-		repo      string
-		wantValid bool
+		name       string
+		repo       string
+		wantErr    bool
 	}{
-		{"valid", "owner/repo", true},
-		{"empty", "", false},
-		{"no_slash", "invalid", false},
-		{"too_many_slashes", "a/b/c", false},
+		{"valid", "owner/repo", false},
+		{"valid_org", "kerwilgil/trazip", false},
+		{"valid_legacy", "kerwilgil/trazip-releases", false},
+		{"empty", "", true},
+		{"no_slash", "invalid", true},
+		{"too_many_slashes", "a/b/c", true},
+		{"dot_segment_current", "owner/.", true},
+		{"dot_segment_parent", "owner/..", true},
+		{"dot_segment_repo", "owner/.", true},
+		{"dot_segment_parent_repo", "owner/..", true},
+		{"url", "https://github.com/owner/repo", true},
+		{"traversal", "../repo", true},
+		{"whitespace", "owner /repo", true},
+		{"trailing_space", "owner/repo ", true},
+		{"leading_space", " owner/repo", true},
+		{"query", "owner/repo?x=1", true},
+		{"fragment", "owner/repo#frag", true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := ChannelConfig{
-				Name:       "test",
+			err := validateChannelConfig(ChannelConfig{
+				Name:       stableChannel,
 				Repository: tt.repo,
-			}
-			isValid := cfg.Repository != "" && strings.Count(cfg.Repository, "/") == 1
-			if isValid != tt.wantValid {
-				t.Errorf("Repository %q: got valid=%v, want %v", tt.repo, isValid, tt.wantValid)
+			})
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Repository %q: got error=%v, wantErr=%v", tt.repo, err != nil, tt.wantErr)
 			}
 		})
 	}
@@ -347,9 +365,9 @@ func TestChannelConfig_RepositoryValidation(t *testing.T) {
 
 func TestChannelConfig_APIBaseValidation(t *testing.T) {
 	tests := []struct {
-		name       string
-		apiBase    string
-		wantErr    bool
+		name    string
+		apiBase string
+		wantErr bool
 	}{
 		{"valid_https", "https://api.github.com", false},
 		{"valid_custom", "https://api.custom.com", false},
@@ -359,22 +377,21 @@ func TestChannelConfig_APIBaseValidation(t *testing.T) {
 		{"invalid_relative", "relative/path", true},
 		{"invalid_userinfo", "https://user:pass@example.com", true},
 		{"no_host", "https://", true},
+		{"with_query", "https://api.github.com?x=1", true},
+		{"with_fragment", "https://api.github.com#fragment", true},
+		{"http", "http://api.github.com", true},
+		{"file", "file:///tmp", true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := ChannelConfig{
+			err := validateChannelConfig(ChannelConfig{
 				Name:       stableChannel,
 				Repository: "owner/repo",
 				APIBase:    tt.apiBase,
-			}
-			err := validateChannelConfig(cfg)
+			})
 			if (err != nil) != tt.wantErr {
 				t.Errorf("validateChannelConfig with %q: got error=%v, wantErr=%v", tt.apiBase, err != nil, tt.wantErr)
-			}
-			// Also test normalization for valid cases
-			if !tt.wantErr && cfg.APIBase != tt.apiBase {
-				t.Errorf("APIBase normalization: got %q, want %q", cfg.APIBase, tt.apiBase)
 			}
 		})
 	}

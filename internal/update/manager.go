@@ -51,8 +51,8 @@ func validateChannelConfig(cfg ChannelConfig) error {
 	if cfg.Repository == "" {
 		return fmt.Errorf("repository is required")
 	}
-	if !repositoryPattern.MatchString(cfg.Repository) {
-		return fmt.Errorf("repository %q must be in owner/repo format (e.g., owner/repo)", cfg.Repository)
+	if err := validateRepositoryFormat(cfg.Repository); err != nil {
+		return err
 	}
 
 	// APIBase: if empty, defaults to GitHub; if provided, must be valid HTTPS URL
@@ -69,6 +69,12 @@ func validateChannelConfig(cfg ChannelConfig) error {
 		}
 		if u.User != nil {
 			return fmt.Errorf("APIBase %q must not contain user credentials", cfg.APIBase)
+		}
+		if u.RawQuery != "" {
+			return fmt.Errorf("APIBase %q must not contain query parameters", cfg.APIBase)
+		}
+		if u.Fragment != "" {
+			return fmt.Errorf("APIBase %q must not contain a fragment", cfg.APIBase)
 		}
 	}
 	return nil
@@ -90,6 +96,39 @@ func normalizeChannelConfig(cfg ChannelConfig) (ChannelConfig, error) {
 
 // repositoryPattern validates GitHub repository format (owner/repo)
 var repositoryPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9-]*\/[a-zA-Z0-9_\-\.]+$`)
+
+// validateRepositoryFormat validates the repository format strictly.
+// Rejects: empty, missing slash, extra slashes, dot segments, traversal, URLs, whitespace, etc.
+func validateRepositoryFormat(repo string) error {
+	if repo == "" {
+		return fmt.Errorf("repository is required")
+	}
+	// Must be exactly owner/repo format (one slash, no extra slashes)
+	parts := strings.Split(repo, "/")
+	if len(parts) != 2 {
+		return fmt.Errorf("repository %q must be in owner/repo format (exactly one slash)", repo)
+	}
+	owner, repoName := parts[0], parts[1]
+	// Owner and repo must not be empty
+	if owner == "" || repoName == "" {
+		return fmt.Errorf("repository %q has empty owner or repo", repo)
+	}
+	// Reject dot segments (current/parent directory)
+	if owner == "." || owner == ".." || repoName == "." || repoName == ".." {
+		return fmt.Errorf("repository %q contains invalid dot segment", repo)
+	}
+	// Reject dot segments anywhere
+	for _, part := range parts {
+		if part == "." || part == ".." {
+			return fmt.Errorf("repository %q contains invalid dot segment", repo)
+		}
+	}
+	// Validate characters (GitHub owner/repo format)
+	if !repositoryPattern.MatchString(repo) {
+		return fmt.Errorf("repository %q must be in owner/repo format (e.g., owner/repo)", repo)
+	}
+return nil
+}
 
 // ChannelConfig represents the configuration for an update channel.
 type ChannelConfig struct {

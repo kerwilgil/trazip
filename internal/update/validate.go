@@ -98,6 +98,10 @@ func validateNotesURL(raw string) error {
 	if u.Host != "github.com" {
 		return fmt.Errorf("notesUrl %q must be on github.com", raw)
 	}
+	// Reject userinfo (credentials in URL)
+	if u.User != nil {
+		return fmt.Errorf("notesUrl %q must not contain user credentials", raw)
+	}
 	// Accept both legacy and new repository URLs for backward compatibility.
 	if strings.HasPrefix(u.Path, "/kerwilgil/trazip-releases/") ||
 		strings.HasPrefix(u.Path, "/kerwilgil/trazip/") {
