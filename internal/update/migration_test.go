@@ -530,3 +530,29 @@ func TestLegacyBridgeRouting(t *testing.T) {
 		t.Errorf("requested path = %q, want /repos/kerwilgil/trazip-releases/releases/latest", requestedPath)
 	}
 }
+
+func TestNewManagerWithConfig_NormalizesAPIBase(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "settings.json")
+
+	m, err := NewManagerWithConfig(UpdateConfig{
+		CurrentVersion: "1.5.0",
+		DownloadDir:    dir,
+		SettingsPath:   settingsPath,
+		Channel: ChannelConfig{
+			Name:       stableChannel,
+			Repository: StableReleaseRepo,
+			APIBase:    "https://api.github.com/",
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewManagerWithConfig: %v", err)
+	}
+
+	if m.ChannelConfig().APIBase != "https://api.github.com" {
+		t.Fatalf("ChannelConfig().APIBase = %q, want https://api.github.com", m.ChannelConfig().APIBase)
+	}
+	if m.apiBase != "https://api.github.com" {
+		t.Fatalf("m.apiBase = %q, want https://api.github.com", m.apiBase)
+	}
+}
