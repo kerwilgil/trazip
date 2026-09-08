@@ -528,7 +528,16 @@ func TestManagerPersistsLastCheckAndInfoAcrossInstances(t *testing.T) {
 		t.Fatalf("first manager's Check: %v", err)
 	}
 
-	m2 := NewManager("0.7.3", t.TempDir(), settingsPath)
+	// Use the same legacy channel config to ensure cache compatibility
+	m2, err := NewManagerWithConfig(UpdateConfig{
+		CurrentVersion: "0.7.3",
+		DownloadDir:    t.TempDir(),
+		SettingsPath:   settingsPath,
+		Channel:        ChannelConfigForLegacy(),
+	})
+	if err != nil {
+		t.Fatalf("NewManagerWithConfig: %v", err)
+	}
 	// Force the persisted lastCheck to look recent so the cache-skip
 	// condition in Check actually engages against a server that would
 	// otherwise prove it was reached.
