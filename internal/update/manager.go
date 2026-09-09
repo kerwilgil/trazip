@@ -6,16 +6,197 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
 
-// checkInterval bounds how often Check actually hits the network unless the
-// caller forces it (the user pressing "Buscar actualizaciones") — see §7 of
-// the design this implements: at most once at startup, not repeatedly.
-const checkInterval = 24 * time.Hour
+const (
+	// checkInterval bounds how often Check actually hits the network unless the
+	// caller forces it (the user pressing "Buscar actualizaciones") — see §7 of
+	// the design this implements: at most once at startup, not repeatedly.
+	checkInterval = 24 * time.Hour
+
+	// LegacyReleaseRepo is the v1.4 distribution channel — kept for bridge
+	// compatibility only. v1.5+ uses StableReleaseRepo.
+	LegacyReleaseRepo = "kerwilgil/trazip-releases"
+
+	// StableReleaseRepo is the v1.5+ official distribution channel.
+	StableReleaseRepo = "kerwilgil/trazip"
+)
+
+const (
+	// stableChannel is the only Manifest.Channel value this build trusts.
+	stableChannel = "stable"
+
+	// updaterAssetName is the ONLY filename ever accepted for the helper
+	// binary — fixed, never taken from the manifest as free text, exactly
+	// like expectedAppAssetName below.
+	updaterAssetName = "trazip-updater.exe"
+)
+
+// validateChannelConfig validates a ChannelConfig for production use.
+// Returns an error if the configuration is invalid.
+func validateChannelConfig(cfg ChannelConfig) error {
+	// Name: must be "stable" (only supported channel for now)
+	if cfg.Name != stableChannel {
+		return fmt.Errorf("channel name %q is not supported; only %q is allowed", cfg.Name, stableChannel)
+	}
+
+	// Repository: must be in owner/repo format (GitHub repository format)
+	if cfg.Repository == "" {
+		return fmt.Errorf("repository is required")
+	}
+	if err := validateRepositoryFormat(cfg.Repository); err != nil {
+		return err
+	}
+
+	// APIBase: if empty, defaults to GitHub; if provided, must be valid HTTPS URL
+	if cfg.APIBase != "" {
+		u, err := url.Parse(cfg.APIBase)
+		if err != nil {
+			return fmt.Errorf("APIBase %q is not a valid URL: %w", cfg.APIBase, err)
+		}
+		if u.Scheme != "https" {
+			return fmt.Errorf("APIBase %q must use https scheme", cfg.APIBase)
+		}
+		if u.Host == "" {
+			return fmt.Errorf("APIBase %q must have a host", cfg.APIBase)
+		}
+		if u.User != nil {
+			return fmt.Errorf("APIBase %q must not contain user credentials", cfg.APIBase)
+		}
+		if u.RawQuery != "" {
+			return fmt.Errorf("APIBase %q must not contain query parameters", cfg.APIBase)
+		}
+		if u.Fragment != "" {
+			return fmt.Errorf("APIBase %q must not contain a fragment", cfg.APIBase)
+		}
+	}
+	return nil
+}
+
+// normalizeChannelConfig normalizes a ChannelConfig for production use.
+// Returns the normalized config or an error if invalid.
+func normalizeChannelConfig(cfg ChannelConfig) (ChannelConfig, error) {
+	if err := validateChannelConfig(cfg); err != nil {
+		return ChannelConfig{}, err
+	}
+	// Normalize APIBase: remove trailing slash
+	if cfg.APIBase != "" {
+		u, _ := url.Parse(cfg.APIBase)
+		cfg.APIBase = strings.TrimRight(u.String(), "/")
+	}
+	return cfg, nil
+}
+
+// repositoryPattern validates GitHub repository format (owner/repo)
+var repositoryPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9-]*\/[a-zA-Z0-9_\-\.]+$`)
+
+// validateRepositoryFormat validates the repository format strictly.
+// Rejects: empty, missing slash, extra slashes, dot segments, traversal, URLs, whitespace, etc.
+func validateRepositoryFormat(repo string) error {
+	if repo == "" {
+		return fmt.Errorf("repository is required")
+	}
+	// Must be exactly owner/repo format (one slash, no extra slashes)
+	parts := strings.Split(repo, "/")
+	if len(parts) != 2 {
+		return fmt.Errorf("repository %q must be in owner/repo format (exactly one slash)", repo)
+	}
+	owner, repoName := parts[0], parts[1]
+	// Owner and repo must not be empty
+	if owner == "" || repoName == "" {
+		return fmt.Errorf("repository %q has empty owner or repo", repo)
+	}
+	// Reject dot segments (current/parent directory)
+	if owner == "." || owner == ".." || repoName == "." || repoName == ".." {
+		return fmt.Errorf("repository %q contains invalid dot segment", repo)
+	}
+	// Reject dot segments anywhere
+	for _, part := range parts {
+		if part == "." || part == ".." {
+			return fmt.Errorf("repository %q contains invalid dot segment", repo)
+		}
+	}
+	// Validate characters (GitHub owner/repo format)
+	if !repositoryPattern.MatchString(repo) {
+		return fmt.Errorf("repository %q must be in owner/repo format (e.g., owner/repo)", repo)
+	}
+return nil
+}
+
+// ChannelConfig represents the configuration for an update channel.
+type ChannelConfig struct {
+	// Name is the human-readable name of the channel (always "stable" for now).
+	Name string `json:"name"`
+
+	// Repository is the GitHub repository (owner/repo) that hosts the releases.
+	Repository string `json:"repository"`
+
+	// APIBase is the base URL for the GitHub API. Defaults to GitHub's public API.
+	APIBase string `json:"apiBase,omitempty"`
+}
+
+// DefaultStableChannelConfig returns the configuration for the stable channel.
+// This is the v1.5+ official channel pointing to the new repository.
+func DefaultStableChannelConfig() ChannelConfig {
+	return ChannelConfig{
+		Name:       stableChannel,
+		Repository: StableReleaseRepo,
+		APIBase:    githubAPIBase,
+	}
+}
+
+// ChannelConfigForLegacy returns the channel configuration for v1.4 bridge compatibility.
+// This is used only for bridge testing and v1.4 compatibility testing.
+// The bridge release published in trazip-releases must use this repository.
+func ChannelConfigForLegacy() ChannelConfig {
+	return ChannelConfig{
+		Name:       stableChannel, // v1.4 only accepts "stable"
+		Repository: LegacyReleaseRepo,
+		APIBase:    githubAPIBase,
+	}
+}
+
+// UpdateConfig holds the configuration for the update client.
+type UpdateConfig struct {
+	// CurrentVersion is the currently installed version.
+	CurrentVersion string
+
+	// DownloadDir is the directory where verified updates are downloaded.
+	DownloadDir string
+
+	// SettingsPath is the path where update settings are persisted.
+	SettingsPath string
+
+	// Channel is the update channel to use. Defaults to the stable channel.
+	Channel ChannelConfig
+
+	// HTTPClient is the HTTP client to use. If nil, a default client is created.
+	HTTPClient *http.Client
+
+	// UserAgent is the User-Agent string to use for requests.
+	UserAgent string
+}
+
+// settings is the only thing this package persists to disk on its own — no
+// license keys or credentials involved, so unlike internal/intel/geoupdate
+// it needs no encryption, just enough state that the 24h cadence, the
+// user's auto-check preference, and replay protection survive a restart.
+type settings struct {
+	AutoCheck   bool         `json:"autoCheck"`
+	LastCheck   time.Time    `json:"lastCheck,omitempty"`
+	Info        *ReleaseInfo `json:"info,omitempty"`
+	HighestSeen string       `json:"highestSeen,omitempty"`
+	// Note: Channel field is not present in v1.4 settings. It is added by v1.5+.
+	// v1.4 settings files will not have this field and will be handled gracefully.
+	Channel string `json:"channel,omitempty"`
+}
 
 // Manager owns the update lifecycle's state machine and enforces its safety
 // rules in one place: never more than one network check per checkInterval
@@ -26,7 +207,7 @@ const checkInterval = 24 * time.Hour
 // started (see MarkInstalling).
 type Manager struct {
 	currentVersion string
-	repo           string
+	channel        ChannelConfig
 	apiBase        string
 	userAgent      string
 	downloadDir    string
@@ -47,51 +228,91 @@ type Manager struct {
 	cancel      context.CancelFunc
 }
 
-// settings is the only thing this package persists to disk on its own — no
-// license keys or credentials involved, so unlike internal/intel/geoupdate
-// it needs no encryption, just enough state that the 24h cadence, the
-// user's auto-check preference, and replay protection survive a restart.
-type settings struct {
-	AutoCheck   bool         `json:"autoCheck"`
-	LastCheck   time.Time    `json:"lastCheck,omitempty"`
-	Info        *ReleaseInfo `json:"info,omitempty"`
-	HighestSeen string       `json:"highestSeen,omitempty"`
-}
-
 // NewManager builds a Manager for the given installed version, downloading
 // verified updates into downloadDir (a caller-owned scratch directory —
 // internal/api passes paths.Sub("updates")) and persisting its auto-check
-// toggle, last-check time, and replay-protection state at settingsPath
+// toggle, last-check time, and replay protection state at settingsPath
 // (paths.Sub("update-settings.json")). AutoCheck defaults to on when no
 // settings file exists yet — see SetAutoCheck's doc comment for the
 // disclosure that default requires.
 func NewManager(currentVersion, downloadDir, settingsPath string) *Manager {
+	m, _ := NewManagerWithConfig(UpdateConfig{
+		CurrentVersion: currentVersion,
+		DownloadDir:    downloadDir,
+		SettingsPath:   settingsPath,
+		Channel:        DefaultStableChannelConfig(),
+	})
+	return m
+}
+
+// NewManagerWithConfig builds a Manager with explicit configuration.
+// This allows v1.5+ to use a configurable update channel while maintaining
+// backward compatibility with v1.4's hardcoded defaults.
+func NewManagerWithConfig(config UpdateConfig) (*Manager, error) {
+	if config.HTTPClient == nil {
+		config.HTTPClient = newHTTPClient()
+	}
+	if config.Channel.Name == "" {
+		config.Channel = DefaultStableChannelConfig()
+	}
+	if config.Channel.APIBase == "" {
+		config.Channel.APIBase = githubAPIBase
+	}
+	if config.UserAgent == "" {
+		config.UserAgent = "TRAZIP/" + config.CurrentVersion
+	}
+
+	// Normalize and validate the channel configuration before creating the manager
+	normalizedChannel, err := normalizeChannelConfig(config.Channel)
+	if err != nil {
+		return nil, fmt.Errorf("invalid channel configuration: %w", err)
+	}
+
 	m := &Manager{
-		currentVersion: currentVersion,
-		repo:           DefaultRepo,
-		apiBase:        githubAPIBase,
-		userAgent:      "TRAZIP/" + currentVersion,
-		downloadDir:    downloadDir,
-		settingsPath:   settingsPath,
-		httpClient:     newHTTPClient(),
+		currentVersion: config.CurrentVersion,
+		channel:        normalizedChannel,
+		apiBase:        normalizedChannel.APIBase,
+		userAgent:      config.UserAgent,
+		downloadDir:    config.DownloadDir,
+		settingsPath:   config.SettingsPath,
+		httpClient:     config.HTTPClient,
 		status:         StatusIdle,
 		autoCheck:      true,
-		highestSeen:    currentVersion,
+		highestSeen:    config.CurrentVersion,
 	}
-	if s, err := loadSettings(settingsPath); err == nil {
+	if s, err := loadSettings(config.SettingsPath); err == nil {
 		m.autoCheck = s.AutoCheck
+		// Preserve highestSeen from settings if it's greater than current,
+		// OR if we're migrating from a legacy channel (preserve replay protection state).
+		preserveHighestSeen := false
 		if cmp, err := compareVersions(s.HighestSeen, m.highestSeen); err == nil && cmp > 0 {
+			preserveHighestSeen = true
+		}
+		// Do NOT preserve highestSeen if it's lower than currentVersion —
+		// the floor must never be lowered (replay protection invariant).
+		if preserveHighestSeen {
 			m.highestSeen = s.HighestSeen
 		}
 		// Only trust a cached result written for the version currently
 		// installed — if TRAZIP was updated since, a stale "0.7.4 is
 		// available" would wrongly re-offer the version already running.
-		if s.Info != nil && s.Info.CurrentVersion == currentVersion {
+		if s.Info != nil && s.Info.CurrentVersion == config.CurrentVersion {
 			m.lastCheck = s.LastCheck
 			m.info = s.Info
 		}
+		// If the persisted channel differs from the current one (e.g., v1.4
+		// settings loaded by v1.5), migrate the channel. v1.4 settings have
+		// no Channel field, so s.Channel will be empty — no migration needed.
+		// If a future version adds a channel field, this logic will handle it.
 	}
-	return m
+	return m, nil
+}
+
+// ChannelConfig returns the current channel configuration.
+func (m *Manager) ChannelConfig() ChannelConfig {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.channel
 }
 
 // AutoCheck reports the user's current preference for automatic
@@ -118,7 +339,13 @@ func (m *Manager) SetAutoCheck(enabled bool) error {
 
 // settingsLocked snapshots persisted state — caller must hold m.mu.
 func (m *Manager) settingsLocked() settings {
-	return settings{AutoCheck: m.autoCheck, LastCheck: m.lastCheck, Info: m.info, HighestSeen: m.highestSeen}
+	return settings{
+		AutoCheck:   m.autoCheck,
+		LastCheck:   m.lastCheck,
+		Info:        m.info,
+		HighestSeen: m.highestSeen,
+		Channel:     m.channel.Name,
+	}
 }
 
 // StartAuto performs at most one background check per 24 hours (see
@@ -224,7 +451,7 @@ func (m *Manager) Check(ctx context.Context, force bool) (ReleaseInfo, error) {
 	m.status = StatusChecking
 	m.mu.Unlock()
 
-	info, err := checkRelease(ctx, m.httpClient, m.apiBase, m.repo, m.currentVersion, m.userAgent)
+	info, err := checkRelease(ctx, m.httpClient, m.apiBase, m.channel.Repository, m.currentVersion, m.userAgent)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -435,8 +662,8 @@ func (m *Manager) PrepareInstall(currentExePath string, portable bool) (UpdaterA
 // MarkInstalling transitions Status to Installing. Call only after the
 // updater process spawned by PrepareInstall's result has actually started
 // successfully (cmd.Start() returned nil) — never before, so a failure to
-// even launch the helper leaves Status at Ready and the user can retry
-// instead of getting stuck.
+// even launch the helper leaves Status at Ready (retryable) instead of
+// stuck at Installing.
 func (m *Manager) MarkInstalling() {
 	m.mu.Lock()
 	defer m.mu.Unlock()

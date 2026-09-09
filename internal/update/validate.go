@@ -2,18 +2,9 @@ package update
 
 import (
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
-)
-
-const (
-	// stableChannel is the only Manifest.Channel value this build trusts.
-	stableChannel = "stable"
-
-	// updaterAssetName is the ONLY filename ever accepted for the helper
-	// binary — fixed, never taken from the manifest as free text, exactly
-	// like expectedAppAssetName below.
-	updaterAssetName = "trazip-updater.exe"
 )
 
 var sha256HexPattern = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
@@ -97,9 +88,24 @@ func validateManifestAsset(a ManifestAsset, want string) error {
 // javascript:, data:, file:, or arbitrary-host URL to open in the user's
 // browser — restricted to TRAZIP's own official releases channel.
 func validateNotesURL(raw string) error {
-	prefix := "https://github.com/" + DefaultRepo + "/"
-	if !strings.HasPrefix(raw, prefix) {
-		return fmt.Errorf("notesUrl %q is not under the official releases channel (%s)", raw, prefix)
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("notesUrl %q is not a valid URL: %w", raw, err)
 	}
-	return nil
+	if u.Scheme != "https" {
+		return fmt.Errorf("notesUrl %q must use https", raw)
+	}
+	if u.Host != "github.com" {
+		return fmt.Errorf("notesUrl %q must be on github.com", raw)
+	}
+	// Reject userinfo (credentials in URL)
+	if u.User != nil {
+		return fmt.Errorf("notesUrl %q must not contain user credentials", raw)
+	}
+	// Accept both legacy and new repository URLs for backward compatibility.
+	if strings.HasPrefix(u.Path, "/kerwilgil/trazip-releases/") ||
+		strings.HasPrefix(u.Path, "/kerwilgil/trazip/") {
+		return nil
+	}
+	return fmt.Errorf("notesUrl %q is not under the official releases channel (legacy: /kerwilgil/trazip-releases/, new: /kerwilgil/trazip/)", raw)
 }

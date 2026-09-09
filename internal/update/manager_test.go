@@ -17,7 +17,7 @@ func newTestManager(currentVersion, downloadDir, apiBase string) *Manager {
 func newTestManagerWithSettings(currentVersion, downloadDir, apiBase, settingsPath string) *Manager {
 	return &Manager{
 		currentVersion: currentVersion,
-		repo:           "kerwilgil/trazip-releases",
+		channel:        ChannelConfigForLegacy(),
 		apiBase:        apiBase,
 		userAgent:      "TRAZIP/" + currentVersion + "-test",
 		downloadDir:    downloadDir,
@@ -528,7 +528,16 @@ func TestManagerPersistsLastCheckAndInfoAcrossInstances(t *testing.T) {
 		t.Fatalf("first manager's Check: %v", err)
 	}
 
-	m2 := NewManager("0.7.3", t.TempDir(), settingsPath)
+	// Use the same legacy channel config to ensure cache compatibility
+	m2, err := NewManagerWithConfig(UpdateConfig{
+		CurrentVersion: "0.7.3",
+		DownloadDir:    t.TempDir(),
+		SettingsPath:   settingsPath,
+		Channel:        ChannelConfigForLegacy(),
+	})
+	if err != nil {
+		t.Fatalf("NewManagerWithConfig: %v", err)
+	}
 	// Force the persisted lastCheck to look recent so the cache-skip
 	// condition in Check actually engages against a server that would
 	// otherwise prove it was reached.
@@ -709,9 +718,8 @@ func TestManagerAcceptsGenuineNewerReleaseAboveHighestSeen(t *testing.T) {
 	// A genuinely NEWER release than anything seen so far must still be
 	// accepted — replay protection must never become a one-way ratchet
 	// that blocks real progress.
-	m2 := NewManager("0.7.4", t.TempDir(), settingsPath)
 	fx2 := newFullReleaseFixture(t, "0.7.6")
-	m2.apiBase = fx2.srv.URL
+	m2 := newTestManagerWithSettings("0.7.4", t.TempDir(), fx2.srv.URL, settingsPath)
 	m2.httpClient = newTestHTTPClient() // NewManager's own client won't trust the TLS test fixture's self-signed cert
 
 	info, err := m2.Check(context.Background(), true)
