@@ -142,6 +142,56 @@ func TestProviderMetaValidate(t *testing.T) {
 			},
 			wantErr: true,
 		},
+
+		// --- P1-02: activity / disclosure consistency ---
+		{
+			name: "active + DisclosurePassive rejected",
+			meta: ProviderMeta{
+				ID: "t", Name: "t", Capabilities: []Capability{CapabilityPortScan},
+				ActivityClass: ActivityActive, DisclosureClass: DisclosurePassive, RequiresScope: true,
+			},
+			wantErr: true,
+		},
+		{
+			name: "active + DisclosureLocal rejected",
+			meta: ProviderMeta{
+				ID: "t", Name: "t", Capabilities: []Capability{CapabilityPortScan},
+				ActivityClass: ActivityActive, DisclosureClass: DisclosureLocal, RequiresScope: true,
+			},
+			wantErr: true,
+		},
+		{
+			name: "active + DisclosureActive accepted",
+			meta: ProviderMeta{
+				ID: "t", Name: "t", Capabilities: []Capability{CapabilityPortScan},
+				ActivityClass: ActivityActive, DisclosureClass: DisclosureActive, RequiresScope: true,
+			},
+			wantErr: false,
+		},
+		{
+			name: "passive + DisclosureActive rejected",
+			meta: ProviderMeta{
+				ID: "t", Name: "t", Capabilities: []Capability{CapabilityRDAP},
+				ActivityClass: ActivityPassive, DisclosureClass: DisclosureActive, RequiresScope: false,
+			},
+			wantErr: true,
+		},
+		{
+			name: "passive + DisclosurePassive accepted",
+			meta: ProviderMeta{
+				ID: "t", Name: "t", Capabilities: []Capability{CapabilityRDAP},
+				ActivityClass: ActivityPassive, DisclosureClass: DisclosurePassive, RequiresScope: false,
+			},
+			wantErr: false,
+		},
+		{
+			name: "passive + DisclosureLocal accepted",
+			meta: ProviderMeta{
+				ID: "t", Name: "t", Capabilities: []Capability{CapabilityRDAP},
+				ActivityClass: ActivityPassive, DisclosureClass: DisclosureLocal, RequiresScope: false,
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -151,6 +201,47 @@ func TestProviderMetaValidate(t *testing.T) {
 				t.Errorf("Validate() error=%v, wantErr=%v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestProvenanceValidate(t *testing.T) {
+	base := func() Provenance {
+		return NewProvenance("p.id", "P Name", "rdap", ActivityPassive, DisclosurePassive, "e", "alta")
+	}
+
+	if err := base().Validate(); err != nil {
+		t.Fatalf("a fresh NewProvenance must be valid: %v", err)
+	}
+
+	tests := []struct {
+		name  string
+		mutfn func(*Provenance)
+	}{
+		{"missing ProviderID", func(p *Provenance) { p.ProviderID = "" }},
+		{"missing ProviderName", func(p *Provenance) { p.ProviderName = "" }},
+		{"missing Capability", func(p *Provenance) { p.Capability = "" }},
+		{"invalid ActivityClass", func(p *Provenance) { p.ActivityClass = ActivityUnknown }},
+		{"invalid DisclosureClass", func(p *Provenance) { p.DisclosureClass = DisclosureUnknown }},
+		{"missing RetrievedAt", func(p *Provenance) { p.RetrievedAt = "" }},
+		{"active without DisclosureActive", func(p *Provenance) {
+			p.ActivityClass = ActivityActive
+			p.DisclosureClass = DisclosurePassive
+		}},
+		{"passive with DisclosureActive", func(p *Provenance) { p.DisclosureClass = DisclosureActive }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := base()
+			tt.mutfn(&p)
+			if err := p.Validate(); err == nil {
+				t.Errorf("Validate() = nil, want error for %q", tt.name)
+			}
+		})
+	}
+
+	// Zero value must be rejected.
+	if err := (Provenance{}).Validate(); err == nil {
+		t.Error("zero-value Provenance must be invalid")
 	}
 }
 

@@ -31,33 +31,36 @@ Those belong to V1.5-3 and beyond.
 
 ```
 internal/osint/
-├── model.go           # ActivityClass, DisclosureClass, Provenance, ProviderMeta, Result
-├── errors.go          # Typed error taxonomy (IsXxx, AsXxx, Unwrap)
-├── provider.go        # Provider interface, Registry, BaseProvider, Passive/Active contracts
+├── model.go           # ActivityClass, DisclosureClass, Provenance (+Validate), ProviderMeta (+Validate), Result
+├── errors.go          # Typed error taxonomy: sentinels + wrapper types with Unwrap, IsXxx predicates
+├── provider.go        # Provider (identity only), PassiveRunner / ActiveRunner, Registry (metadata lookup), BaseProvider
+├── executor.go        # Executor — the central execution gate (ExecutePassive / ExecuteActive)
 ├── cache.go           # Bounded LRU+TTL cache (thread-safe, no background goroutines)
 ├── ratelimit.go       # Token-bucket limiter (context-aware, cancelable)
 ├── scope.go           # ScopeGuard wrapper (fail-closed, wraps internal/scope)
 ├── passive/
-│   └── provider.go    # PassiveProvider interface + capability constants + example
+│   └── provider.go    # PassiveRunner alias + capability constants + example skeleton
 └── active/
-    └── provider.go    # ActiveProvider interface + capability constants + example
+    └── provider.go    # ActiveRunner alias + capability constants + example skeleton
 ```
 
 ### Key Design Principles
 
 1. **Local-first, explicit disclosure** — Every provider declares its disclosure class. Nothing leaves the machine without the user's knowledge.
 
-2. **Passive/Active hard boundary** — Separate interfaces, separate packages, separate activity classes. An active operation cannot accidentally enter the passive pipeline. A passive operation never requires a Scope Guard.
+2. **Passive/Active hard boundary** — Separate runner interfaces, separate packages, separate activity classes. The framework — not the provider — enforces the boundary: `Executor.ExecutePassive` rejects a non-passive provider, and `Executor.ExecuteActive` rejects anything that is not active, each *before* the provider's code runs.
 
-3. **Fail-closed Scope Guard** — Active operations are rejected unless an authorized scope exists AND the target is within it. No exceptions.
+3. **Central execution gate** — A registered provider is never run by calling a method on it directly. `Registry` hands out only metadata; the only route to execution is `Executor`, which runs the authorization, pipeline, context and provenance checks in one place.
 
-4. **Provenance on every result** — Provider ID, capability, activity class, disclosure class, timestamp, endpoint, confidence. No silent enrichment.
+4. **Fail-closed Scope Guard** — Active execution is rejected unless an explicit, authorized `ScopeGuard` exists AND the target is within it. A nil guard, an unauthorized guard, or an out-of-scope target each stop the call before the provider is invoked.
 
-5. **Bounded resources** — Caches have hard max size. Rate limiters have configurable burst/rate. No unbounded maps, no goroutine leaks.
+5. **Provenance on every successful result** — Provider ID, name, capability, activity class, disclosure class, timestamp. The gate validates it and converts a successful result with missing/incoherent provenance into a fail-closed error. Results that fail *before* the provider gathers intelligence (scope denied, unsupported capability, invalid input, dead context) are not required to carry provenance.
 
-6. **Context throughout** — Every blocking operation accepts `context.Context`. Cancellation propagates. No hidden retry loops.
+6. **Bounded resources** — Caches have a hard max size. Rate limiters have configurable burst/rate. No unbounded maps, no goroutine leaks.
 
-7. **Typed errors** — `errors.Is/As` work. Distinguish: invalid config, unsupported capability, scope denied, rate limited, provider unavailable, external failure, canceled, deadline exceeded.
+7. **Context throughout** — Every blocking operation accepts `context.Context`. The gate checks `ctx.Err()` before invoking a provider; cancellation and deadline errors are surfaced (never swallowed) via `ErrCanceled` / `ErrDeadlineExceeded`.
+
+8. **Typed errors** — Wrapper types implement `Unwrap`, so `errors.Is` and `errors.As` both work against them; `IsXxx` predicates are provided for the common checks. Distinguish: invalid config, unsupported capability, scope denied, activity violation, invalid provenance, rate limited, provider unavailable, external failure, canceled, deadline exceeded.
 
 ---
 
@@ -66,27 +69,30 @@ internal/osint/
 ### Passive (`ActivityPassive`)
 - **Definition**: Purely external lookups. No packets sent to target infrastructure.
 - **Examples**: RDAP queries, CVE database lookups, Certificate Transparency log searches, ASN mapping, passive subdomain enumeration.
-- **Disclosure**: `DisclosurePassive` (external HTTP/DNS to third party).
+- **Disclosure**: `DisclosureLocal` or `DisclosurePassive` — never `DisclosureActive`.
 - **Scope Guard**: NOT required.
-- **Interface**: `osint.PassiveProvider` (in `internal/osint/passive`)
+- **Runner**: implements `osint.PassiveRunner` (`Lookup`), run via `Executor.ExecutePassive`.
 
 ### Active (`ActivityActive`)
 - **Definition**: Sends packets/probes directly to target infrastructure.
 - **Examples**: Port scanning, traceroute, service detection, active DNS (AXFR, brute force).
-- **Disclosure**: `DisclosureActive` (direct network interaction with target).
+- **Disclosure**: `DisclosureActive` (required).
 - **Scope Guard**: REQUIRED — must be authorized AND target within scope.
-- **Interface**: `osint.ActiveProvider` (in `internal/osint/active`)
+- **Runner**: implements `osint.ActiveRunner` (`Probe`), run via `Executor.ExecuteActive`. The runner performs **no** scope check of its own — the gate has already authorized the target.
 
-### Compile-time Enforcement
+### Registration-time consistency (`ProviderMeta.Validate`)
 ```go
-// ProviderMeta.Validate() enforces:
-if meta.ActivityClass == ActivityActive && !meta.RequiresScope {
-    return error // active MUST require scope
-}
-if meta.ActivityClass == ActivityPassive && meta.RequiresScope {
-    return error // passive MUST NOT require scope
-}
+// ActivityActive  => RequiresScope == true  && DisclosureClass == DisclosureActive
+// ActivityPassive => RequiresScope == false && DisclosureClass in {DisclosureLocal, DisclosurePassive}
 ```
+`Registry.Register` additionally rejects a provider whose declared `ActivityClass`
+does not match the runner interface it implements (passive ⇒ `PassiveRunner`,
+active ⇒ `ActiveRunner`).
+
+### Runtime enforcement (`Executor`)
+- `ExecutePassive` rejects any provider whose `ActivityClass != ActivityPassive` — the provider is **not** invoked.
+- `ExecuteActive` rejects a nil guard, an unauthorized guard, or an out-of-scope target — the provider is **not** invoked.
+- Both check `ctx.Err()` first and validate returned provenance last.
 
 ---
 
@@ -100,34 +106,67 @@ type ProviderMeta struct {
     Capabilities    []Capability  // at least one
     ActivityClass   ActivityClass // Passive or Active
     DisclosureClass DisclosureClass
-    RequiresScope   bool          // derived from ActivityClass
+    RequiresScope   bool          // must agree with ActivityClass (see Validate)
     RateLimit       string        // free-text quota note
 }
 ```
+Set once by the provider. `Registry` stores a defensive snapshot (the
+`Capabilities` slice is copied) and every accessor returns a copy, so a
+caller cannot mutate registry state through a retained slice.
 
-### Provider Interface
+### Interfaces
 ```go
+// Identity only — this is what Registry hands out. No execution method.
 type Provider interface {
     Meta() ProviderMeta
-    Execute(ctx context.Context, capability Capability, input any) Result
+}
+
+// Implemented by passive providers. Invoked ONLY by Executor.ExecutePassive.
+type PassiveRunner interface {
+    Provider
+    Lookup(ctx context.Context, capability Capability, input any) Result
+}
+
+// Implemented by active providers. Invoked ONLY by Executor.ExecuteActive,
+// which has already authorized the target. Probe does no scope check.
+type ActiveRunner interface {
+    Provider
+    Probe(ctx context.Context, capability Capability, target string, input any) Result
 }
 ```
 
-### Registry
+### Registry (metadata only)
 ```go
 reg := osint.NewRegistry()
-reg.Register(myProvider)        // at startup
-providers := reg.GetByCapability(osint.CapabilityRDAP)
-passive := reg.GetPassive()
-active := reg.GetActive()
+reg.Register(myProvider)                     // validates meta + class/runner match
+
+meta, ok := reg.Lookup("rdap.ripe")          // (ProviderMeta, bool)
+metas := reg.MetasByCapability(osint.CapabilityRDAP)
+passive := reg.PassiveMetas()
+active := reg.ActiveMetas()
+```
+There is no `Registry` method that returns a runnable provider — execution
+goes through `Executor` only.
+
+### Executor (the execution gate)
+```go
+ex := osint.NewExecutor(reg)
+
+// Passive: rejects a non-passive provider before its code runs.
+res := ex.ExecutePassive(ctx, "rdap.ripe", osint.CapabilityRDAP, "1.1.1.1")
+
+// Active: fail-closed. guard nil / unauthorized / target out of scope => reject.
+guard := osint.NewScopeGuard()
+_ = guard.Authorize("LAN audit", []string{"192.168.1.0/24"})
+res = ex.ExecuteActive(ctx, guard, "portscan.local", osint.CapabilityPortScan, "192.168.1.10", nil)
 ```
 
-### Result (Always carries Provenance)
+### Result
 ```go
 type Result struct {
     Data       any        // capability-specific payload
-    Provenance Provenance // mandatory
-    Err        error      // if failed, Data may be nil
+    Provenance Provenance // required on success; validated by the gate
+    Err        error      // when non-nil, Data is nil
 }
 ```
 
@@ -135,22 +174,21 @@ type Result struct {
 
 ## Scope Guard
 
-Wraps `internal/scope.Guard` with OSINT-specific helpers.
+Wraps `internal/scope.Guard` with OSINT-specific helpers. The gate calls
+`RequireTarget` for you before any active provider runs; providers do not
+call it themselves.
 
 ```go
 guard := osint.NewScopeGuard()
 guard.Authorize("LAN audit", []string{"192.168.1.0/24", "internal.example.com"})
-
-// In active provider Execute:
-if err := guard.RequireTarget("port_scan", "nmap.active", target); err != nil {
-    return osint.Result{Err: err} // ScopeDeniedError or ScopeRequiredError
-}
 ```
 
-### Behavior
-- **Unauthorized** → `ScopeRequiredError` (wraps `ErrScopeDenied`)
+### Behavior (as seen through `Executor.ExecuteActive`)
+- **guard == nil** → `ScopeRequiredError` (wraps `ErrScopeDenied`)
+- **Unauthorized guard** → `ScopeRequiredError` (wraps `ErrScopeDenied`)
 - **Authorized but target out of scope** → `ScopeDeniedError` (wraps `ErrScopeDenied`)
-- **Authorized and in scope** → proceeds
+- **Authorized and in scope** → the provider's `Probe` is invoked
+- Dynamic scope revocation is **not** offered in V1.5-2.
 
 ---
 
@@ -183,6 +221,13 @@ type Provenance struct {
     Disclosure       external.Disclosure
 }
 ```
+
+`Provenance.Validate()` requires a successful result to carry, at minimum,
+`ProviderID`, `ProviderName`, `Capability`, a valid `ActivityClass` and
+`DisclosureClass`, and a non-empty `RetrievedAt`, with activity/disclosure
+coherent. `Executor` runs this check and additionally verifies the
+provenance names the provider and pipeline it actually ran; a mismatch is
+converted to a fail-closed `InvalidProvenanceError`.
 
 Future extensions (V1.5-3+):
 - `EvidenceClass`: `OBSERVED` | `POSSIBLE_CONTEXT` | `NOT_PROVEN`
@@ -242,23 +287,27 @@ ok := limiter.TryAcquire()          // non-blocking
 
 ## Context & Cancellation
 
-Every blocking operation signature:
+Blocking operation signatures:
 ```go
-Execute(ctx context.Context, ...) Result
-Acquire(ctx context.Context) error
-Get(key string) (any, bool)  // non-blocking
+Executor.ExecutePassive(ctx context.Context, ...) Result
+Executor.ExecuteActive(ctx context.Context, guard *ScopeGuard, ...) Result
+PassiveRunner.Lookup(ctx context.Context, ...) Result
+ActiveRunner.Probe(ctx context.Context, ...) Result
+Limiter.Acquire(ctx context.Context) error
+Cache.Get(key string) (any, bool)  // non-blocking
 ```
 
 ### Cancellation Rules
-- Context cancellation → return `context.Canceled` (wrapped as `ErrCanceled`)
-- Deadline exceeded → return `context.DeadlineExceeded` (wrapped as `ErrDeadlineExceeded`)
-- Provider must NOT retry infinitely on cancellation
-- Provider must NOT swallow context errors
+- `Executor` checks `ctx.Err()` before invoking any provider — an already
+  done context means the provider is never called.
+- Context cancellation → `ErrCanceled` (wrapping `context.Canceled`); `IsCanceled` is true.
+- Deadline exceeded → `ErrDeadlineExceeded` (wrapping `context.DeadlineExceeded`); `IsDeadlineExceeded` is true.
+- Provider must NOT retry infinitely on cancellation, and must NOT swallow context errors.
 
 ### Test Coverage Required
-- Already-canceled context
-- Cancellation mid-operation
-- Cancellation while waiting on rate limiter
+- Already-canceled context: provider invocation count = 0 (passive and active paths)
+- Expired deadline: provider invocation count = 0 (passive and active paths)
+- Cancellation while waiting on the rate limiter
 - No hidden infinite retry loops
 
 ---
@@ -270,6 +319,8 @@ Get(key string) (any, bool)  // non-blocking
 | Invalid config | `ErrInvalidConfig` | `InvalidConfigError` | No |
 | Unsupported capability | `ErrUnsupportedCapability` | `UnsupportedCapabilityError` | No |
 | Scope denied | `ErrScopeDenied` | `ScopeDeniedError` / `ScopeRequiredError` | No |
+| Activity violation | `ErrActivityViolation` | `ActivityViolationError` | No |
+| Invalid provenance | `ErrInvalidProvenance` | `InvalidProvenanceError` | No |
 | Rate limited | `ErrRateLimited` | `RateLimitedError` | **Yes** |
 | Provider unavailable | `ErrProviderUnavailable` | `ProviderUnavailableError` | **Yes** |
 | External lookup failed | `ErrExternalLookupFailed` | `ExternalLookupFailedError` | **Yes** |
@@ -279,12 +330,17 @@ Get(key string) (any, bool)  // non-blocking
 Helper predicates:
 ```go
 osint.IsRetryable(err)    // rate limited, unavailable, external fail, deadline
-osint.IsPermanent(err)    // invalid config, unsupported, scope denied
-osint.IsCanceled(err)     // context.Canceled or wrapped
+osint.IsPermanent(err)    // invalid config, unsupported, scope denied,
+                          // activity violation, invalid provenance
+osint.IsCanceled(err)         // context.Canceled or wrapped
 osint.IsDeadlineExceeded(err)
 osint.IsScopeDenied(err)
 osint.IsRateLimited(err)
+osint.IsActivityViolation(err)
+osint.IsInvalidProvenance(err)
 ```
+There are no `AsXxx` helpers: use `errors.As` directly with the concrete
+wrapper types (`*ScopeDeniedError`, `*ActivityViolationError`, …).
 
 ---
 
@@ -294,18 +350,18 @@ All tests use synthetic providers / `httptest` — **no real network**.
 
 | Test | Description |
 |------|-------------|
-| A | ProviderMeta validation (valid/invalid) |
-| B | Passive/Active separation (compile + runtime) |
-| C | ScopeGuard fail-closed (unauthorized) |
-| D | Out-of-scope active target rejected |
+| A | ProviderMeta validation (valid/invalid) incl. activity/disclosure/scope coherence |
+| B | Passive/Active separation enforced by the framework (a malicious active provider run without/with-unauthorized/out-of-scope guard is rejected with invocation count 0; authorized+in-scope runs once; active-via-passive rejected) |
+| C | ScopeGuard fail-closed (nil guard, unauthorized) |
+| D | Out-of-scope active target rejected before provider invocation |
 | E | Authorized synthetic active target allowed |
-| F | Provenance preserved on Result |
+| F | Provenance enforced: successful result without valid provenance is converted to a fail-closed error; pre-execution failures are exempt |
 | G | Cache max capacity enforced |
 | H | Cache LRU eviction |
 | I | Cache TTL expiry |
 | J | Rate limiter context cancellation |
-| K | Context cancellation propagation |
-| L | Typed errors detectable via Is/As |
+| K | Context cancellation / deadline: provider not invoked on a dead context (passive + active) |
+| L | Typed errors detectable via `errors.Is` / `errors.As` |
 | M | Disclosure classification correct |
 | N | No unexpected network in tests |
 
@@ -336,17 +392,18 @@ All tests use synthetic providers / `httptest` — **no real network**.
 ## Rules for Future Integrations (V1.5-3+)
 
 1. **One provider per package** under `internal/osint/providers/<name>/`
-2. **Implement correct interface** — `PassiveProvider` or `ActiveProvider`
-3. **Declare accurate metadata** — ActivityClass, DisclosureClass, RequiresScope
-4. **Use bounded cache** — `osint.NewCache(size)` per provider
-5. **Use rate limiter** — `osint.NewLimiter(rate, burst)` per provider
-6. **Respect context** — all blocking calls accept `ctx`
-7. **Return typed errors** — wrap sentinel errors with context
-8. **Preserve provenance** — `osint.NewProvenance(...)` on every result
-9. **No secrets in logs** — sanitize endpoints, no API keys in output
-10. **Tests with httptest** — no real Internet in unit tests
-11. **Document disclosure** — what data leaves, where it goes
-12. **Cable inference = POSSIBLE_CONTEXT** — never OBSERVED
+2. **Implement the correct runner** — `PassiveRunner` (`Lookup`) or `ActiveRunner` (`Probe`); run it through `Executor`, never directly
+3. **Declare accurate metadata** — `ActivityClass`, `DisclosureClass`, `RequiresScope` (coherent per `ProviderMeta.Validate`)
+4. **Do not scope-check inside `Probe`** — the gate has already authorized the target
+5. **Use bounded cache** — `osint.NewCache(size)` per provider
+6. **Use rate limiter** — `osint.NewLimiter(rate, burst)` per provider
+7. **Respect context** — all blocking calls accept `ctx`
+8. **Return typed errors** — wrap sentinel errors with context
+9. **Preserve provenance** — `osint.NewProvenance(...)` on every successful result; it must name your provider and pipeline
+10. **No secrets in logs** — sanitize endpoints, no API keys in output
+11. **Tests with httptest** — no real Internet in unit tests
+12. **Document disclosure** — what data leaves, where it goes
+13. **Cable inference = POSSIBLE_CONTEXT** — never OBSERVED
 
 ---
 
@@ -368,13 +425,15 @@ git diff --check
 ## Security / Privacy Invariants (Enforced by Architecture)
 
 - ✅ Local-first default
-- ✅ Explicit disclosure declaration per provider
-- ✅ Active ops require Scope Guard (fail-closed)
+- ✅ Explicit disclosure declaration per provider, coherent with activity class
+- ✅ Active execution requires an authorized Scope Guard — enforced by `Executor`, not the provider (fail-closed)
+- ✅ A provider cannot be run through the wrong pipeline, or at all, except via `Executor`
+- ✅ A successful result without valid provenance is rejected fail-closed
 - ✅ No unbounded caches
 - ✅ No background polling goroutines
 - ✅ No secrets in code/fixtures/logs
 - ✅ No silent network calls on import/init
-- ✅ Context cancellation respected everywhere
+- ✅ Context cancellation checked before any provider is invoked
 
 ---
 
@@ -382,12 +441,13 @@ git diff --check
 
 | File | Purpose |
 |------|---------|
-| `internal/osint/model.go` | Core types: ActivityClass, DisclosureClass, Provenance, ProviderMeta, Result, Capability |
-| `internal/osint/errors.go` | Typed error sentinels + wrappers + Is/As helpers |
-| `internal/osint/provider.go` | Provider interface, Registry, BaseProvider, Passive/Active contracts |
+| `internal/osint/model.go` | Core types: ActivityClass, DisclosureClass, Provenance (+Validate), ProviderMeta (+Validate/clone), Result, Capability |
+| `internal/osint/errors.go` | Typed error sentinels + wrapper types (Unwrap) + IsXxx predicates |
+| `internal/osint/provider.go` | Provider (identity), PassiveRunner / ActiveRunner, Registry (metadata lookup + defensive snapshot), BaseProvider |
+| `internal/osint/executor.go` | Executor — central execution gate (ExecutePassive / ExecuteActive), context + provenance enforcement |
 | `internal/osint/cache.go` | Bounded LRU+TTL cache |
 | `internal/osint/ratelimit.go` | Token-bucket limiter (context-aware) |
 | `internal/osint/scope.go` | ScopeGuard wrapper (fail-closed) |
-| `internal/osint/passive/provider.go` | PassiveProvider interface + capabilities + example |
-| `internal/osint/active/provider.go` | ActiveProvider interface + capabilities + example |
+| `internal/osint/passive/provider.go` | PassiveRunner alias + capabilities + example skeleton |
+| `internal/osint/active/provider.go` | ActiveRunner alias + capabilities + example skeleton |
 | `docs/OSINT_FOUNDATION.md` | This document |

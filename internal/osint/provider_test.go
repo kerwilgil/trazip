@@ -6,9 +6,13 @@ import (
 	"testing"
 )
 
-// testPassiveProvider is a minimal passive provider for testing.
+// ------------------------------------------------------------
+// Well-behaved synthetic providers
+// ------------------------------------------------------------
+
 type testPassiveProvider struct {
 	*BaseProvider
+	calls int
 }
 
 func newTestPassiveProvider() *testPassiveProvider {
@@ -27,7 +31,8 @@ func newTestPassiveProvider() *testPassiveProvider {
 	}
 }
 
-func (p *testPassiveProvider) Execute(ctx context.Context, capability Capability, input any) Result {
+func (p *testPassiveProvider) Lookup(ctx context.Context, capability Capability, input any) Result {
+	p.calls++
 	if capability != CapabilityRDAP && capability != CapabilityASNMapping {
 		return Result{Err: &UnsupportedCapabilityError{Provider: p.Meta().ID, Capability: capability}}
 	}
@@ -40,17 +45,12 @@ func (p *testPassiveProvider) Execute(ctx context.Context, capability Capability
 	}
 }
 
-func (p *testPassiveProvider) PassiveCapabilities() []Capability {
-	return p.Meta().Capabilities
-}
-
-// testActiveProvider is a minimal active provider for testing.
 type testActiveProvider struct {
 	*BaseProvider
-	scopeGuard *ScopeGuard
+	calls int
 }
 
-func newTestActiveProvider(guard *ScopeGuard) *testActiveProvider {
+func newTestActiveProvider() *testActiveProvider {
 	return &testActiveProvider{
 		BaseProvider: &BaseProvider{
 			MetaVal: ProviderMeta{
@@ -63,237 +63,144 @@ func newTestActiveProvider(guard *ScopeGuard) *testActiveProvider {
 				RateLimit:       "10/sec",
 			},
 		},
-		scopeGuard: guard,
 	}
 }
 
-func (p *testActiveProvider) Execute(ctx context.Context, capability Capability, input any) Result {
-	if p.scopeGuard == nil {
-		return Result{Err: &ScopeRequiredError{Operation: string(capability), Provider: p.Meta().ID}}
-	}
+func (p *testActiveProvider) Probe(ctx context.Context, capability Capability, target string, input any) Result {
+	p.calls++
 	if capability != CapabilityPortScan {
 		return Result{Err: &UnsupportedCapabilityError{Provider: p.Meta().ID, Capability: capability}}
-	}
-	target, ok := input.(string)
-	if !ok {
-		return Result{Err: &InvalidConfigError{Provider: p.Meta().ID, Field: "input", Reason: "must be string"}}
-	}
-	if err := p.scopeGuard.RequireTarget(string(capability), p.Meta().ID, target); err != nil {
-		return Result{Err: err}
 	}
 	return Result{
 		Data: map[string]any{"target": target, "ports": []int{80, 443}},
 		Provenance: NewProvenance(
 			p.Meta().ID, p.Meta().Name, string(capability),
-			ActivityActive, DisclosureActive, target, "high",
+			ActivityActive, DisclosureActive, target, "alta",
 		),
 	}
 }
 
-func (p *testActiveProvider) ActiveCapabilities() []Capability {
-	return p.Meta().Capabilities
-}
+// ------------------------------------------------------------
+// Registry
+// ------------------------------------------------------------
 
-func (p *testActiveProvider) RequireScope() bool { return true }
-
-func TestProviderMetaValidation(t *testing.T) {
-	// Valid passive
-	p := newTestPassiveProvider()
-	if err := p.ValidateMeta(); err != nil {
-		t.Errorf("Valid passive meta: %v", err)
-	}
-
-	// Valid active
-	guard := NewScopeGuard()
-	a := newTestActiveProvider(guard)
-	if err := a.ValidateMeta(); err != nil {
-		t.Errorf("Valid active meta: %v", err)
-	}
-}
-
-func TestPassiveProviderExecution(t *testing.T) {
-	p := newTestPassiveProvider()
-
-	// Valid capability
-	res := p.Execute(context.Background(), CapabilityRDAP, "1.1.1.1")
-	if !res.IsOK() {
-		t.Errorf("Execute RDAP: %v", res.Err)
-	}
-	if res.Provenance.ProviderID != "test.passive" {
-		t.Errorf("Provenance ProviderID = %q, want test.passive", res.Provenance.ProviderID)
-	}
-	if res.Provenance.ActivityClass != ActivityPassive {
-		t.Errorf("Provenance ActivityClass = %v, want passive", res.Provenance.ActivityClass)
-	}
-	if res.Provenance.DisclosureClass != DisclosurePassive {
-		t.Errorf("Provenance DisclosureClass = %v, want passive", res.Provenance.DisclosureClass)
-	}
-
-	// Invalid capability
-	res = p.Execute(context.Background(), CapabilityPortScan, "1.1.1.1")
-	if res.IsOK() {
-		t.Error("Execute unsupported capability should fail")
-	}
-	if !IsUnsupportedCapability(res.Err) {
-		t.Errorf("Error should be UnsupportedCapability: %v", res.Err)
-	}
-}
-
-func TestActiveProviderExecution(t *testing.T) {
-	guard := NewScopeGuard()
-	guard.Authorize("test scope", []string{"192.168.1.0/24"})
-
-	p := newTestActiveProvider(guard)
-
-	// In scope
-	res := p.Execute(context.Background(), CapabilityPortScan, "192.168.1.1")
-	if !res.IsOK() {
-		t.Errorf("Execute in scope: %v", res.Err)
-	}
-	if res.Provenance.ActivityClass != ActivityActive {
-		t.Errorf("Provenance ActivityClass = %v, want active", res.Provenance.ActivityClass)
-	}
-	if res.Provenance.DisclosureClass != DisclosureActive {
-		t.Errorf("Provenance DisclosureClass = %v, want active", res.Provenance.DisclosureClass)
-	}
-
-	// Out of scope
-	res = p.Execute(context.Background(), CapabilityPortScan, "10.0.0.1")
-	if res.IsOK() {
-		t.Error("Execute out of scope should fail")
-	}
-	if !IsScopeDenied(res.Err) {
-		t.Errorf("Error should be ScopeDenied: %v", res.Err)
-	}
-
-	// No scope guard
-	p2 := newTestActiveProvider(nil)
-	res = p2.Execute(context.Background(), CapabilityPortScan, "192.168.1.1")
-	if res.IsOK() {
-		t.Error("Execute without scope guard should fail")
-	}
-	if !IsScopeDenied(res.Err) {
-		t.Errorf("Error should be ScopeDenied: %v", res.Err)
-	}
-}
-
-func TestRegistry(t *testing.T) {
+func TestRegistryRegisterAndLookup(t *testing.T) {
 	reg := NewRegistry()
 
-	passive := newTestPassiveProvider()
-	guard := NewScopeGuard()
-	active := newTestActiveProvider(guard)
-
-	// Register
-	if err := reg.Register(passive); err != nil {
-		t.Errorf("Register passive: %v", err)
+	if err := reg.Register(newTestPassiveProvider()); err != nil {
+		t.Fatalf("register passive: %v", err)
 	}
-	if err := reg.Register(active); err != nil {
-		t.Errorf("Register active: %v", err)
+	if err := reg.Register(newTestActiveProvider()); err != nil {
+		t.Fatalf("register active: %v", err)
 	}
 
-	// Duplicate ID should fail
-	dup := newTestPassiveProvider()
-	if err := reg.Register(dup); err == nil {
-		t.Error("Register duplicate ID should fail")
+	if err := reg.Register(newTestPassiveProvider()); err == nil {
+		t.Error("duplicate provider ID should be rejected")
+	}
+	if err := reg.Register(nil); err == nil {
+		t.Error("nil provider should be rejected")
 	}
 
-	// Get by ID
-	p, ok := reg.GetByID("test.passive")
-	if !ok || p.Meta().ID != "test.passive" {
-		t.Errorf("GetByID passive: ok=%v, id=%v", ok, p.Meta().ID)
+	meta, ok := reg.Lookup("test.passive")
+	if !ok || meta.ID != "test.passive" || meta.ActivityClass != ActivityPassive {
+		t.Errorf("Lookup(test.passive) = %+v, ok=%v", meta, ok)
+	}
+	if _, ok := reg.Lookup("nope"); ok {
+		t.Error("Lookup of unknown ID should report not found")
 	}
 
-	// Get by capability
-	providers := reg.GetByCapability(CapabilityRDAP)
-	if len(providers) != 1 || providers[0].Meta().ID != "test.passive" {
-		t.Errorf("GetByCapability RDAP: len=%d", len(providers))
+	if got := reg.MetasByCapability(CapabilityRDAP); len(got) != 1 || got[0].ID != "test.passive" {
+		t.Errorf("MetasByCapability(RDAP) = %+v", got)
+	}
+	if got := reg.PassiveMetas(); len(got) != 1 || got[0].ID != "test.passive" {
+		t.Errorf("PassiveMetas = %+v", got)
+	}
+	if got := reg.ActiveMetas(); len(got) != 1 || got[0].ID != "test.active" {
+		t.Errorf("ActiveMetas = %+v", got)
+	}
+	if got := reg.AllMetas(); len(got) != 2 {
+		t.Errorf("AllMetas len = %d, want 2", len(got))
 	}
 
-	// Get passive
-	passiveList := reg.GetPassive()
-	if len(passiveList) != 1 || passiveList[0].Meta().ID != "test.passive" {
-		t.Errorf("GetPassive: len=%d", len(passiveList))
+	seen := map[Capability]bool{}
+	for _, c := range reg.Capabilities() {
+		seen[c] = true
 	}
-
-	// Get active
-	activeList := reg.GetActive()
-	if len(activeList) != 1 || activeList[0].Meta().ID != "test.active" {
-		t.Errorf("GetActive: len=%d", len(activeList))
-	}
-
-	// All
-	all := reg.All()
-	if len(all) != 2 {
-		t.Errorf("All: len=%d, want 2", len(all))
-	}
-
-	// Capabilities
-	caps := reg.Capabilities()
-	found := false
-	for _, c := range caps {
-		if c == CapabilityRDAP || c == CapabilityPortScan {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("Capabilities missing: %v", caps)
+	if !seen[CapabilityRDAP] || !seen[CapabilityPortScan] {
+		t.Errorf("Capabilities missing entries: %v", reg.Capabilities())
 	}
 }
 
-func TestRegistryInvalidMeta(t *testing.T) {
+func TestRegistryRejectsInvalidMeta(t *testing.T) {
 	reg := NewRegistry()
-
-	// Missing ID
-	bad := &testPassiveProvider{}
-	bad.BaseProvider = &BaseProvider{
-		MetaVal: ProviderMeta{
-			Name:            "Bad",
-			Capabilities:    []Capability{CapabilityRDAP},
-			ActivityClass:   ActivityPassive,
-			DisclosureClass: DisclosurePassive,
-			RequiresScope:   false,
-		},
-	}
-
+	bad := &testPassiveProvider{BaseProvider: &BaseProvider{MetaVal: ProviderMeta{
+		Name:            "Bad",
+		Capabilities:    []Capability{CapabilityRDAP},
+		ActivityClass:   ActivityPassive,
+		DisclosureClass: DisclosurePassive,
+	}}}
 	err := reg.Register(bad)
-	if err == nil {
-		t.Error("Register with invalid meta should fail")
-	}
-	if !IsInvalidConfig(err) {
-		t.Errorf("Error should be InvalidConfig: %v", err)
+	if err == nil || !IsInvalidConfig(err) {
+		t.Errorf("register with missing ID should fail as InvalidConfig, got %v", err)
 	}
 }
 
-func TestProviderCapabilities(t *testing.T) {
-	p := newTestPassiveProvider()
-	caps := p.PassiveCapabilities()
-	if len(caps) != 2 {
-		t.Errorf("PassiveCapabilities = %d, want 2", len(caps))
-	}
+// runnerlessActive declares ActivityActive but implements no ActiveRunner.
+type runnerlessActive struct{ *BaseProvider }
 
-	guard := NewScopeGuard()
-	a := newTestActiveProvider(guard)
-	caps = a.ActiveCapabilities()
-	if len(caps) != 1 {
-		t.Errorf("ActiveCapabilities = %d, want 1", len(caps))
-	}
-	if !a.RequireScope() {
-		t.Error("Active provider RequireScope should be true")
+func TestRegistryRejectsClassRunnerMismatch(t *testing.T) {
+	reg := NewRegistry()
+	p := &runnerlessActive{BaseProvider: &BaseProvider{MetaVal: ProviderMeta{
+		ID:              "no.runner",
+		Name:            "No Runner",
+		Capabilities:    []Capability{CapabilityPortScan},
+		ActivityClass:   ActivityActive,
+		DisclosureClass: DisclosureActive,
+		RequiresScope:   true,
+	}}}
+	err := reg.Register(p)
+	if err == nil || !IsInvalidConfig(err) {
+		t.Errorf("active provider without ActiveRunner should be rejected, got %v", err)
 	}
 }
 
-func TestPassiveProviderRequiresScopeFalse(t *testing.T) {
-	p := newTestPassiveProvider()
-	if p.Meta().RequiresScope {
-		t.Error("Passive provider RequiresScope should be false")
+// TestRegistryCapabilitiesDefensiveCopy proves a caller cannot mutate
+// registry state through the Capabilities slice it passed in, nor through
+// the slice it gets back.
+func TestRegistryCapabilitiesDefensiveCopy(t *testing.T) {
+	reg := NewRegistry()
+
+	caps := []Capability{CapabilityRDAP, CapabilityASNMapping}
+	p := &testPassiveProvider{BaseProvider: &BaseProvider{MetaVal: ProviderMeta{
+		ID:              "copy.passive",
+		Name:            "Copy Passive",
+		Capabilities:    caps,
+		ActivityClass:   ActivityPassive,
+		DisclosureClass: DisclosurePassive,
+	}}}
+	if err := reg.Register(p); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	caps[0] = CapabilityPortScan // mutate the caller's original slice
+
+	meta, _ := reg.Lookup("copy.passive")
+	if meta.Capabilities[0] != CapabilityRDAP {
+		t.Errorf("registry meta mutated via caller slice: %v", meta.Capabilities)
+	}
+
+	meta.Capabilities[0] = CapabilityCVE // mutate the returned copy
+	again, _ := reg.Lookup("copy.passive")
+	if again.Capabilities[0] != CapabilityRDAP {
+		t.Errorf("registry meta mutated via returned slice: %v", again.Capabilities)
 	}
 }
 
-func TestActiveProviderRequiresScopeTrue(t *testing.T) {
-	guard := NewScopeGuard()
-	a := newTestActiveProvider(guard)
-	if !a.Meta().RequiresScope {
-		t.Error("Active provider RequiresScope should be true")
+func TestBaseProviderValidateMeta(t *testing.T) {
+	if err := newTestPassiveProvider().ValidateMeta(); err != nil {
+		t.Errorf("valid passive meta: %v", err)
+	}
+	if err := newTestActiveProvider().ValidateMeta(); err != nil {
+		t.Errorf("valid active meta: %v", err)
 	}
 }

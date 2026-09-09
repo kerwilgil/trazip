@@ -1,5 +1,7 @@
 // Package passive provides the base types for passive OSINT providers.
-// Passive providers perform external lookups only — no packets sent to targets.
+// Passive providers perform external lookups only — no packets sent to
+// targets. They run through osint.Executor.ExecutePassive, which rejects
+// any non-passive provider before this code is reached.
 package passive
 
 import (
@@ -8,19 +10,13 @@ import (
 	"trazip/internal/osint"
 )
 
-// Provider is the interface for passive OSINT providers.
-// Embed osint.BaseProvider and implement Execute.
-type Provider interface {
-	osint.Provider
-	osint.PassiveProvider
-}
+// Provider is the contract a passive OSINT provider satisfies: identity plus
+// the Lookup method invoked only by the execution gate.
+type Provider = osint.PassiveRunner
 
 // ============================================================
-// Passive capabilities (for reference — providers declare these)
+// Passive capabilities (providers declare these in their metadata)
 // ============================================================
-
-// These are the passive capabilities defined in the foundation.
-// Real providers in V1.5-3+ will implement these.
 
 // CapabilityRDAP — WHOIS/RDAP lookup for IP/ASN/domain registration data.
 const CapabilityRDAP = osint.CapabilityRDAP
@@ -41,12 +37,13 @@ const CapabilitySubdomain = osint.CapabilitySubdomain
 // Example passive provider skeleton (not functional — for reference)
 // ============================================================
 
-// ExampleProvider is a template for passive providers.
-// Replace with real implementation in V1.5-3+.
+// ExampleProvider is a template for passive providers. Replace with a real
+// implementation in V1.5-3+.
 type ExampleProvider struct {
 	*osint.BaseProvider
 }
 
+// NewExampleProvider builds the reference skeleton.
 func NewExampleProvider() *ExampleProvider {
 	return &ExampleProvider{
 		BaseProvider: &osint.BaseProvider{
@@ -63,7 +60,8 @@ func NewExampleProvider() *ExampleProvider {
 	}
 }
 
-func (p *ExampleProvider) Execute(ctx context.Context, capability osint.Capability, input any) osint.Result {
+// Lookup is invoked only by osint.Executor.ExecutePassive.
+func (p *ExampleProvider) Lookup(ctx context.Context, capability osint.Capability, input any) osint.Result {
 	if capability != osint.CapabilityRDAP {
 		return osint.Result{
 			Err: &osint.UnsupportedCapabilityError{
@@ -72,7 +70,10 @@ func (p *ExampleProvider) Execute(ctx context.Context, capability osint.Capabili
 			},
 		}
 	}
-	// TODO: implement real RDAP lookup
+	if err := ctx.Err(); err != nil {
+		return osint.Result{Err: err}
+	}
+	// TODO(v1.5-3): implement a real RDAP lookup.
 	return osint.Result{
 		Data: map[string]string{"status": "not implemented"},
 		Provenance: osint.NewProvenance(
@@ -85,8 +86,4 @@ func (p *ExampleProvider) Execute(ctx context.Context, capability osint.Capabili
 			"media",
 		),
 	}
-}
-
-func (p *ExampleProvider) PassiveCapabilities() []osint.Capability {
-	return []osint.Capability{osint.CapabilityRDAP}
 }

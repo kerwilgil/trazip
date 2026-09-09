@@ -217,3 +217,29 @@ func TestIsPermanent(t *testing.T) {
 		t.Error("IsPermanent(ErrProviderUnavailable) should be false")
 	}
 }
+
+func TestActivityViolationError(t *testing.T) {
+	err := &ActivityViolationError{Provider: "p", Pipeline: ActivityPassive, Actual: ActivityActive}
+	if !errors.Is(err, ErrActivityViolation) {
+		t.Error("Is(ErrActivityViolation) should be true")
+	}
+	if !IsActivityViolation(err) {
+		t.Error("IsActivityViolation should be true")
+	}
+	if !IsPermanent(err) || IsRetryable(err) {
+		t.Error("activity violation should be permanent, not retryable")
+	}
+}
+
+func TestInvalidProvenanceError(t *testing.T) {
+	err := &InvalidProvenanceError{Provider: "p", Reason: "missing ProviderID"}
+	if !errors.Is(err, ErrInvalidProvenance) {
+		t.Error("Is(ErrInvalidProvenance) should be true")
+	}
+	if !IsInvalidProvenance(err) {
+		t.Error("IsInvalidProvenance should be true")
+	}
+	if !IsPermanent(err) || IsRetryable(err) {
+		t.Error("invalid provenance should be permanent, not retryable")
+	}
+}

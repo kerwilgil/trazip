@@ -85,7 +85,11 @@ func (d DisclosureClass) IsValid() bool {
 // Provenance — every result carries its origin
 // ============================================================
 
-// Provenance records where a result came from. Immutable after creation.
+// Provenance records where a result came from. A provider fills it in once
+// when it builds a Result; the framework and consumers treat it as
+// read-only (it holds no pointers, slices, or maps, so a copy is a full
+// copy). The execution gate refuses a successful Result whose Provenance
+// does not pass Validate.
 type Provenance struct {
 	// ProviderID is the stable identifier of the source (e.g., "rdap.ripe",
 	// "cve.nvd", "ct.crtsh", "asn.ripe").
@@ -140,6 +144,33 @@ func NewProvenance(providerID, providerName, capability string, activity Activit
 	}
 }
 
+// Validate reports whether the provenance is complete and internally
+// coherent enough to accompany a successful result. The execution gate
+// calls this and converts a failure into a fail-closed error.
+func (p Provenance) Validate() error {
+	switch {
+	case p.ProviderID == "":
+		return fmt.Errorf("missing ProviderID")
+	case p.ProviderName == "":
+		return fmt.Errorf("missing ProviderName")
+	case p.Capability == "":
+		return fmt.Errorf("missing Capability")
+	case !p.ActivityClass.IsValid():
+		return fmt.Errorf("invalid ActivityClass %q", p.ActivityClass)
+	case !p.DisclosureClass.IsValid():
+		return fmt.Errorf("invalid DisclosureClass %q", p.DisclosureClass)
+	case p.RetrievedAt == "":
+		return fmt.Errorf("missing RetrievedAt")
+	}
+	if p.ActivityClass == ActivityActive && p.DisclosureClass != DisclosureActive {
+		return fmt.Errorf("active activity requires DisclosureActive, got %q", p.DisclosureClass)
+	}
+	if p.ActivityClass == ActivityPassive && p.DisclosureClass == DisclosureActive {
+		return fmt.Errorf("passive activity cannot use DisclosureActive")
+	}
+	return nil
+}
+
 // ============================================================
 // Provider Metadata — identity & capabilities
 // ============================================================
@@ -160,8 +191,11 @@ const (
 	CapabilityActiveDNS               Capability = "active_dns"
 )
 
-// ProviderMeta describes a provider's identity and capabilities.
-// Immutable after creation — providers register once at startup.
+// ProviderMeta describes a provider's identity and capabilities. A provider
+// sets it once and returns an equivalent value from every Meta() call; the
+// Registry stores a defensive snapshot (Capabilities copied) at
+// registration and hands out copies, so a caller cannot mutate registry
+// state through a retained slice.
 type ProviderMeta struct {
 	ID              string
 	Name            string
@@ -175,7 +209,20 @@ type ProviderMeta struct {
 	RateLimit string
 }
 
-// Validate checks that the metadata is well-formed.
+// clone returns a copy with its own Capabilities backing array.
+func (m ProviderMeta) clone() ProviderMeta {
+	cp := m
+	if m.Capabilities != nil {
+		cp.Capabilities = append([]Capability(nil), m.Capabilities...)
+	}
+	return cp
+}
+
+// Validate checks that the metadata is well-formed and that the
+// activity / disclosure / scope fields are mutually consistent:
+//
+//	ActivityActive  => RequiresScope == true  && DisclosureClass == DisclosureActive
+//	ActivityPassive => RequiresScope == false && DisclosureClass in {Local, Passive}
 func (m ProviderMeta) Validate() error {
 	if m.ID == "" {
 		return &InvalidConfigError{Provider: "unknown", Field: "ID", Reason: "missing ID"}
@@ -192,11 +239,22 @@ func (m ProviderMeta) Validate() error {
 	if !m.DisclosureClass.IsValid() {
 		return &InvalidConfigError{Provider: m.ID, Field: "DisclosureClass", Reason: fmt.Sprintf("invalid disclosure class %q", m.DisclosureClass)}
 	}
-	if m.ActivityClass == ActivityActive && !m.RequiresScope {
-		return &InvalidConfigError{Provider: m.ID, Field: "RequiresScope", Reason: "active provider must require scope"}
-	}
-	if m.ActivityClass == ActivityPassive && m.RequiresScope {
-		return &InvalidConfigError{Provider: m.ID, Field: "RequiresScope", Reason: "passive provider must not require scope"}
+
+	switch m.ActivityClass {
+	case ActivityActive:
+		if !m.RequiresScope {
+			return &InvalidConfigError{Provider: m.ID, Field: "RequiresScope", Reason: "active provider must require scope"}
+		}
+		if m.DisclosureClass != DisclosureActive {
+			return &InvalidConfigError{Provider: m.ID, Field: "DisclosureClass", Reason: fmt.Sprintf("active provider must declare DisclosureActive, got %q", m.DisclosureClass)}
+		}
+	case ActivityPassive:
+		if m.RequiresScope {
+			return &InvalidConfigError{Provider: m.ID, Field: "RequiresScope", Reason: "passive provider must not require scope"}
+		}
+		if m.DisclosureClass == DisclosureActive {
+			return &InvalidConfigError{Provider: m.ID, Field: "DisclosureClass", Reason: "passive provider must not declare DisclosureActive"}
+		}
 	}
 	return nil
 }

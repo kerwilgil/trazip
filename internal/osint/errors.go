@@ -41,6 +41,14 @@ var ErrCacheMiss = errors.New("osint: cache miss")
 // ErrCacheFull is returned when a bounded cache is at capacity.
 var ErrCacheFull = errors.New("osint: cache full")
 
+// ErrActivityViolation is returned when a provider is run through the wrong
+// pipeline — e.g. an active provider submitted to ExecutePassive.
+var ErrActivityViolation = errors.New("osint: activity class violation")
+
+// ErrInvalidProvenance is returned when a successful result reaches the
+// execution gate without valid, coherent provenance.
+var ErrInvalidProvenance = errors.New("osint: invalid or missing provenance")
+
 // InvalidConfigError wraps ErrInvalidConfig with details.
 type InvalidConfigError struct {
 	Provider string
@@ -148,6 +156,45 @@ func IsExternalLookupFailed(err error) bool {
 	return errors.Is(err, ErrExternalLookupFailed)
 }
 
+// ActivityViolationError wraps ErrActivityViolation with details. It is
+// returned by the execution gate when a provider is run through a pipeline
+// that does not match its declared ActivityClass.
+type ActivityViolationError struct {
+	Provider string
+	Pipeline ActivityClass // the pipeline the caller used
+	Actual   ActivityClass // the provider's declared class
+}
+
+func (e *ActivityViolationError) Error() string {
+	return fmt.Sprintf("osint: provider %q (%s) cannot run in the %s pipeline", e.Provider, e.Actual, e.Pipeline)
+}
+
+func (e *ActivityViolationError) Unwrap() error { return ErrActivityViolation }
+
+// IsActivityViolation reports whether err is an ErrActivityViolation (or wraps it).
+func IsActivityViolation(err error) bool {
+	return errors.Is(err, ErrActivityViolation)
+}
+
+// InvalidProvenanceError wraps ErrInvalidProvenance with details. It is
+// returned by the execution gate when a provider reports success but the
+// accompanying provenance is missing or incoherent.
+type InvalidProvenanceError struct {
+	Provider string
+	Reason   string
+}
+
+func (e *InvalidProvenanceError) Error() string {
+	return fmt.Sprintf("osint: provider %q returned a successful result with invalid provenance: %s", e.Provider, e.Reason)
+}
+
+func (e *InvalidProvenanceError) Unwrap() error { return ErrInvalidProvenance }
+
+// IsInvalidProvenance reports whether err is an ErrInvalidProvenance (or wraps it).
+func IsInvalidProvenance(err error) bool {
+	return errors.Is(err, ErrInvalidProvenance)
+}
+
 // IsCanceled reports whether err is due to context cancellation (including wrapped).
 func IsCanceled(err error) bool {
 	return errors.Is(err, ErrCanceled) || errors.Is(err, context.Canceled)
@@ -165,5 +212,6 @@ func IsRetryable(err error) bool {
 
 // IsPermanent reports whether an error is permanent and should not be retried.
 func IsPermanent(err error) bool {
-	return IsInvalidConfig(err) || IsUnsupportedCapability(err) || IsScopeDenied(err)
+	return IsInvalidConfig(err) || IsUnsupportedCapability(err) || IsScopeDenied(err) ||
+		IsActivityViolation(err) || IsInvalidProvenance(err)
 }

@@ -1,6 +1,9 @@
 // Package active provides the base types for active OSINT providers.
 // Active providers send packets/probes directly to target infrastructure.
-// They REQUIRE an authorized ScopeGuard to execute.
+//
+// Authorization is NOT the provider's job: osint.Executor.ExecuteActive
+// verifies an authorized ScopeGuard and an in-scope target before Probe is
+// ever called. A provider here performs no scope checks of its own.
 package active
 
 import (
@@ -9,15 +12,12 @@ import (
 	"trazip/internal/osint"
 )
 
-// Provider is the interface for active OSINT providers.
-// Embed osint.BaseProvider and implement Execute.
-type Provider interface {
-	osint.Provider
-	osint.ActiveProvider
-}
+// Provider is the contract an active OSINT provider satisfies: identity plus
+// the Probe method invoked only by the execution gate.
+type Provider = osint.ActiveRunner
 
 // ============================================================
-// Active capabilities (for reference — providers declare these)
+// Active capabilities (providers declare these in their metadata)
 // ============================================================
 
 // CapabilityPortScan — TCP/UDP port scanning.
@@ -36,17 +36,15 @@ const CapabilityActiveDNS = osint.CapabilityActiveDNS
 // Example active provider skeleton (not functional — for reference)
 // ============================================================
 
-// ExampleProvider is a template for active providers.
-// Replace with real implementation in V1.5-3+.
-// REQUIRES ScopeGuard to be authorized before Execute.
+// ExampleProvider is a template for active providers. Replace with a real
+// implementation in V1.5-3+. It holds no ScopeGuard: the execution gate has
+// already authorized the target by the time Probe runs.
 type ExampleProvider struct {
 	*osint.BaseProvider
-	// ScopeGuard is mandatory for active providers.
-	// Must be set by caller before Execute.
-	ScopeGuard *osint.ScopeGuard
 }
 
-func NewExampleProvider(scopeGuard *osint.ScopeGuard) *ExampleProvider {
+// NewExampleProvider builds the reference skeleton.
+func NewExampleProvider() *ExampleProvider {
 	return &ExampleProvider{
 		BaseProvider: &osint.BaseProvider{
 			MetaVal: osint.ProviderMeta{
@@ -59,21 +57,12 @@ func NewExampleProvider(scopeGuard *osint.ScopeGuard) *ExampleProvider {
 				RateLimit:       "10 req/sec",
 			},
 		},
-		ScopeGuard: scopeGuard,
 	}
 }
 
-func (p *ExampleProvider) Execute(ctx context.Context, capability osint.Capability, input any) osint.Result {
-	// Active providers MUST check scope first
-	if p.ScopeGuard == nil {
-		return osint.Result{
-			Err: &osint.ScopeRequiredError{
-				Operation: string(capability),
-				Provider:  p.Meta().ID,
-			},
-		}
-	}
-
+// Probe is invoked only by osint.Executor.ExecuteActive, which has already
+// confirmed target is within an authorized scope.
+func (p *ExampleProvider) Probe(ctx context.Context, capability osint.Capability, target string, input any) osint.Result {
 	if capability != osint.CapabilityPortScan {
 		return osint.Result{
 			Err: &osint.UnsupportedCapabilityError{
@@ -82,25 +71,19 @@ func (p *ExampleProvider) Execute(ctx context.Context, capability osint.Capabili
 			},
 		}
 	}
-
-	// Extract target from input
-	target, ok := input.(string)
-	if !ok {
+	if target == "" {
 		return osint.Result{
 			Err: &osint.InvalidConfigError{
 				Provider: p.Meta().ID,
-				Field:    "input",
-				Reason:   "active input must be string target",
+				Field:    "target",
+				Reason:   "active probe requires a non-empty target",
 			},
 		}
 	}
-
-	// Check target against scope
-	if err := p.ScopeGuard.RequireTarget(string(capability), p.Meta().ID, target); err != nil {
+	if err := ctx.Err(); err != nil {
 		return osint.Result{Err: err}
 	}
-
-	// TODO: implement real port scan
+	// TODO(v1.5-3): implement a real port scan.
 	return osint.Result{
 		Data: map[string]any{
 			"target": target,
@@ -114,15 +97,7 @@ func (p *ExampleProvider) Execute(ctx context.Context, capability osint.Capabili
 			osint.ActivityActive,
 			osint.DisclosureActive,
 			target,
-			"high",
+			"alta",
 		),
 	}
-}
-
-func (p *ExampleProvider) ActiveCapabilities() []osint.Capability {
-	return []osint.Capability{osint.CapabilityPortScan}
-}
-
-func (p *ExampleProvider) RequireScope() bool {
-	return true
 }

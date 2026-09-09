@@ -2,7 +2,6 @@
 package osint
 
 import (
-	"context"
 	"fmt"
 
 	"trazip/internal/scope"
@@ -36,57 +35,28 @@ func (g *ScopeGuard) Label() string {
 	return g.guard.Label()
 }
 
-// CheckAddr verifies an IP address is within the authorized scope.
-// Returns ErrScopeDenied if not authorized or out of scope.
-func (g *ScopeGuard) CheckAddr(addr string) error {
-	// Parse as netip.Addr
-	// We need to import netip - let's use the guard's internal method
-	return g.checkTarget(addr)
-}
-
-// CheckHost verifies a hostname is within the authorized scope.
-// Returns ErrScopeDenied if not authorized or out of scope.
-func (g *ScopeGuard) CheckHost(host string) error {
-	return g.checkTarget(host)
-}
-
-// CheckTarget verifies an IP, hostname, or CIDR against the authorized scope.
-// Returns ErrScopeDenied if not authorized or out of scope.
+// CheckTarget verifies an IP address, hostname, or CIDR against the
+// authorized scope, normalising through the underlying scope.Guard.
+// Returns a ScopeDeniedError (wrapping ErrScopeDenied) if no scope is
+// authorized or the target falls outside it.
 func (g *ScopeGuard) CheckTarget(target string) error {
-	return g.checkTarget(target)
-}
-
-func (g *ScopeGuard) checkTarget(target string) error {
-	err := g.guard.CheckTarget(target)
-	if err != nil {
+	if err := g.guard.CheckTarget(target); err != nil {
 		return &ScopeDeniedError{Target: target, Reason: err.Error()}
 	}
 	return nil
 }
 
-// CheckPrefix verifies a CIDR prefix is within scope.
-// target must be a valid CIDR string (e.g., "10.0.0.0/8").
-func (g *ScopeGuard) CheckPrefix(target string) error {
-	// Use the underlying guard's CheckPrefix via CheckTarget
-	return g.checkTarget(target)
-}
+// CheckAddr is a convenience alias of CheckTarget for callers that already
+// know target is an IP address. The check performed is identical.
+func (g *ScopeGuard) CheckAddr(addr string) error { return g.CheckTarget(addr) }
+
+// CheckHost is a convenience alias of CheckTarget for callers that already
+// know target is a hostname. The check performed is identical.
+func (g *ScopeGuard) CheckHost(host string) error { return g.CheckTarget(host) }
 
 // Guard returns the underlying scope.Guard for advanced use cases.
 func (g *ScopeGuard) Guard() *scope.Guard {
 	return g.guard
-}
-
-// ============================================================
-// Context-aware scope checking
-// ============================================================
-
-// WithScopeContext returns a context that will be canceled if the scope
-// guard becomes unauthorized (e.g., scope revoked). Useful for long-running
-// active operations that should stop if scope is withdrawn.
-func (g *ScopeGuard) WithScopeContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	// For V1.5-2, scope doesn't support dynamic revocation.
-	// Return a no-op cancel for now.
-	return ctx, func() {}
 }
 
 // ScopeRequiredError is returned when an active operation is attempted
@@ -102,8 +72,8 @@ func (e *ScopeRequiredError) Error() string {
 
 func (e *ScopeRequiredError) Unwrap() error { return ErrScopeDenied }
 
-// RequireScope is a helper that returns ScopeRequiredError if the guard
-// is not authorized. Use at the start of active provider Execute methods.
+// RequireScope returns a ScopeRequiredError if the guard is not authorized.
+// The execution gate calls it before invoking any active provider.
 func (g *ScopeGuard) RequireScope(operation, provider string) error {
 	if !g.Authorized() {
 		return &ScopeRequiredError{Operation: operation, Provider: provider}
