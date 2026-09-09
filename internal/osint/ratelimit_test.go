@@ -262,3 +262,136 @@ func TestMultiLimiterNilSkipped(t *testing.T) {
 		t.Errorf("MultiLimiter with nil should work: %v", err)
 	}
 }
+
+// ------------------------------------------------------------
+// P1-07 — a dynamic rate change must wake a waiting Acquire
+// ------------------------------------------------------------
+
+// drainBurst consumes the whole bucket so the next Acquire has to wait.
+func drainBurst(t *testing.T, l *Limiter) {
+	t.Helper()
+	for i := 0; i < 10000; i++ {
+		if !l.TryAcquire() {
+			return
+		}
+	}
+	t.Fatal("could not drain burst")
+}
+
+func TestSetRateToUnlimitedWakesWaitingAcquire(t *testing.T) {
+	lim := NewLimiter(0.001, 1) // ~1000s to earn a token
+	drainBurst(t, lim)
+
+	done := make(chan error, 1)
+	go func() { done <- lim.Acquire(context.Background()) }()
+
+	select {
+	case err := <-done:
+		t.Fatalf("Acquire returned early (%v) before SetRate", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	lim.SetRate(0) // unlimited — must wake the sleeping waiter
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("woken Acquire returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("SetRate(0) did not wake the waiting Acquire (still on the old timer)")
+	}
+}
+
+func TestSetRateIncreaseWakesAndRecalculates(t *testing.T) {
+	lim := NewLimiter(0.01, 1) // ~100s to earn a token
+	drainBurst(t, lim)
+
+	done := make(chan error, 1)
+	go func() { done <- lim.Acquire(context.Background()) }()
+
+	select {
+	case err := <-done:
+		t.Fatalf("Acquire returned early (%v) before SetRate", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	start := time.Now()
+	lim.SetRate(1000) // fast — waiter must recompute a tiny wait, not sit on the old timer
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("woken Acquire returned error: %v", err)
+		}
+		if el := time.Since(start); el > 2*time.Second {
+			t.Fatalf("Acquire took %v after SetRate — it waited the old slow timer instead of recomputing", el)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("SetRate(1000) did not wake/recalculate the waiting Acquire")
+	}
+}
+
+func TestSetRateContextCancellationStillWins(t *testing.T) {
+	lim := NewLimiter(0.001, 1)
+	drainBurst(t, lim)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- lim.Acquire(ctx) }()
+
+	select {
+	case err := <-done:
+		t.Fatalf("Acquire returned early (%v)", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if !IsCanceled(err) {
+			t.Fatalf("want context cancellation, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancel() did not unblock the waiting Acquire")
+	}
+}
+
+// ------------------------------------------------------------
+// P1-07B — the interval before SetRate is credited at the OLD rate
+// ------------------------------------------------------------
+
+func TestRateChangeUsesOldRateForElapsedInterval(t *testing.T) {
+	cur := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	lim := NewLimiter(1, 50) // 1 token/sec, burst 50
+	restore := lim.WithClock(func() time.Time { return cur })
+	defer restore()
+	lim.Reset() // align lastRefill to the frozen clock, bucket full
+
+	for i := 0; i < 50; i++ {
+		if !lim.TryAcquire() {
+			t.Fatalf("drain %d: expected a token", i)
+		}
+	}
+	if lim.TryAcquire() {
+		t.Fatal("bucket should be empty after draining the burst")
+	}
+
+	cur = cur.Add(2 * time.Second) // a controlled interval, all at the OLD rate (1/s)
+	lim.SetRate(100)               // must credit that interval at 1/s, never at 100/s
+
+	got := lim.Tokens()
+	if got > 3 {
+		t.Errorf("retroactive over-credit: %.2f tokens after SetRate(100), want ~2 (2s at old 1/s)", got)
+	}
+	if got < 1 {
+		t.Errorf("under-credit: %.2f tokens, want ~2", got)
+	}
+
+	// And going forward the NEW rate applies: +0.5s at 100/s => +50, capped at 50.
+	cur = cur.Add(500 * time.Millisecond)
+	if got := lim.Tokens(); got < 49 {
+		t.Errorf("new rate not applied after the switch: %.2f tokens, want ~50", got)
+	}
+}

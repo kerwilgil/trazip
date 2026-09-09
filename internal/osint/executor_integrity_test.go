@@ -226,6 +226,85 @@ func TestExecutorActiveProvenanceActivityMismatch(t *testing.T) {
 }
 
 // ------------------------------------------------------------
+// P1-08 — invalid / duplicate capabilities block registration, so the
+// provider can never be reached
+// ------------------------------------------------------------
+
+func TestRegistryRejectsInvalidCapabilitiesAndProviderNeverRuns(t *testing.T) {
+	reg := NewRegistry()
+
+	// Passive provider, empty/unknown capability.
+	np := &noProvenanceProvider{meta: ProviderMeta{
+		ID:              "bad.caps",
+		Name:            "Bad Caps",
+		Capabilities:    []Capability{CapabilityUnknown},
+		ActivityClass:   ActivityPassive,
+		DisclosureClass: DisclosurePassive,
+	}}
+	if err := reg.Register(np); err == nil || !IsInvalidConfig(err) {
+		t.Fatalf("Register with unknown capability must fail as InvalidConfig, got %v", err)
+	}
+
+	// Active provider, unknown capability.
+	act := &maliciousActiveProvider{meta: ProviderMeta{
+		ID:              "bad.active.caps",
+		Name:            "Bad Active Caps",
+		Capabilities:    []Capability{CapabilityUnknown},
+		ActivityClass:   ActivityActive,
+		DisclosureClass: DisclosureActive,
+		RequiresScope:   true,
+	}}
+	if err := reg.Register(act); err == nil || !IsInvalidConfig(err) {
+		t.Fatalf("active Register with unknown capability must fail, got %v", err)
+	}
+
+	// Duplicate capabilities.
+	dup := &noProvenanceProvider{meta: ProviderMeta{
+		ID:              "dup.caps",
+		Name:            "Dup Caps",
+		Capabilities:    []Capability{CapabilityRDAP, CapabilityRDAP},
+		ActivityClass:   ActivityPassive,
+		DisclosureClass: DisclosurePassive,
+	}}
+	if err := reg.Register(dup); err == nil || !IsInvalidConfig(err) {
+		t.Fatalf("Register with duplicate capability must fail, got %v", err)
+	}
+
+	// None registered → the Executor cannot reach any of them.
+	ex := NewExecutor(reg)
+	guard := NewScopeGuard()
+	_ = guard.Authorize("lab", []string{"192.168.1.0/24"})
+
+	if res := ex.ExecutePassive(context.Background(), "bad.caps", CapabilityRDAP, nil); res.Err == nil {
+		t.Error("passive: an unregistered provider must not be executable")
+	}
+	if res := ex.ExecuteActive(context.Background(), guard, "bad.active.caps", CapabilityPortScan, "192.168.1.1", nil); res.Err == nil {
+		t.Error("active: an unregistered provider must not be executable")
+	}
+	if np.calls != 0 || act.calls != 0 || dup.calls != 0 {
+		t.Errorf("providers with invalid metadata ran (np=%d act=%d dup=%d), want 0", np.calls, act.calls, dup.calls)
+	}
+}
+
+// A provider that declares multiple unique capabilities registers and each
+// declared capability is executable; an undeclared one is still gated.
+func TestRegistryAcceptsMultipleUniqueCapabilities(t *testing.T) {
+	reg := NewRegistry()
+	pas := newTestPassiveProvider() // declares RDAP + ASNMapping
+	mustRegister(t, reg, pas)
+	ex := NewExecutor(reg)
+
+	for _, c := range []Capability{CapabilityRDAP, CapabilityASNMapping} {
+		if res := ex.ExecutePassive(context.Background(), "test.passive", c, "x"); !res.IsOK() {
+			t.Errorf("declared capability %q should execute, got %v", c, res.Err)
+		}
+	}
+	if res := ex.ExecutePassive(context.Background(), "test.passive", CapabilityCVE, "x"); !IsUnsupportedCapability(res.Err) {
+		t.Errorf("undeclared capability should be gated, got %v", res.Err)
+	}
+}
+
+// ------------------------------------------------------------
 // P2 — nil / typed-nil hardening
 // ------------------------------------------------------------
 

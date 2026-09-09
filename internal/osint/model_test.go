@@ -192,6 +192,56 @@ func TestProviderMetaValidate(t *testing.T) {
 			},
 			wantErr: false,
 		},
+
+		// --- P1-08: capabilities must be non-empty and unique ---
+		{
+			name: "passive + CapabilityUnknown rejected",
+			meta: ProviderMeta{
+				ID: "t", Name: "t", Capabilities: []Capability{CapabilityUnknown},
+				ActivityClass: ActivityPassive, DisclosureClass: DisclosurePassive,
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty-string capability rejected",
+			meta: ProviderMeta{
+				ID: "t", Name: "t", Capabilities: []Capability{Capability("")},
+				ActivityClass: ActivityPassive, DisclosureClass: DisclosurePassive,
+			},
+			wantErr: true,
+		},
+		{
+			name: "active + CapabilityUnknown rejected",
+			meta: ProviderMeta{
+				ID: "t", Name: "t", Capabilities: []Capability{CapabilityUnknown},
+				ActivityClass: ActivityActive, DisclosureClass: DisclosureActive, RequiresScope: true,
+			},
+			wantErr: true,
+		},
+		{
+			name: "duplicate capability rejected",
+			meta: ProviderMeta{
+				ID: "t", Name: "t", Capabilities: []Capability{CapabilityRDAP, CapabilityRDAP},
+				ActivityClass: ActivityPassive, DisclosureClass: DisclosurePassive,
+			},
+			wantErr: true,
+		},
+		{
+			name: "multiple unique capabilities accepted",
+			meta: ProviderMeta{
+				ID: "t", Name: "t", Capabilities: []Capability{CapabilityRDAP, CapabilityCVE, CapabilityASNMapping},
+				ActivityClass: ActivityPassive, DisclosureClass: DisclosurePassive,
+			},
+			wantErr: false,
+		},
+		{
+			name: "custom extensible capability accepted",
+			meta: ProviderMeta{
+				ID: "t", Name: "t", Capabilities: []Capability{Capability("vendor.custom.thing")},
+				ActivityClass: ActivityPassive, DisclosureClass: DisclosurePassive,
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {

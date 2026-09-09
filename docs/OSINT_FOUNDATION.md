@@ -36,7 +36,7 @@ internal/osint/
 ├── provider.go        # Provider (identity only), PassiveRunner / ActiveRunner, Registry (metadata lookup), BaseProvider
 ├── executor.go        # Executor — the central execution gate (ExecutePassive / ExecuteActive)
 ├── cache.go           # Bounded LRU+TTL cache (thread-safe, no background goroutines)
-├── ratelimit.go       # Token-bucket limiter (context-aware, cancelable)
+├── ratelimit.go       # Token-bucket limiter (context-aware, cancelable, dynamic — wakes waiters on reconfigure)
 ├── scope.go           # ScopeGuard wrapper (fail-closed, wraps internal/scope)
 ├── passive/
 │   └── provider.go    # PassiveRunner alias + capability constants (contract only, no runnable provider)
@@ -93,6 +93,13 @@ internal/osint/
 `Registry.Register` additionally rejects a provider whose declared `ActivityClass`
 does not match the runner interface it implements (passive ⇒ `PassiveRunner`,
 active ⇒ `ActiveRunner`).
+
+**Capabilities** must be a valid *set*: at least one entry, every entry
+**non-empty** (`CapabilityUnknown` / `Capability("")` rejected) and **unique**
+(no duplicates). It is not a closed whitelist — `Capability` is an extensible
+string, so a custom `Capability("vendor.thing")` is accepted. The central
+capability gate relies on this, so a provider with an empty or undefined
+capability can never register and therefore can never reach `Lookup` / `Probe`.
 
 ### Runtime enforcement (`Executor`)
 - `ExecutePassive` rejects any provider whose `ActivityClass != ActivityPassive` — the provider is **not** invoked.
@@ -303,14 +310,23 @@ ok := limiter.TryAcquire()          // non-blocking
 ### Properties
 - **Token bucket**: Smooth rate limiting with burst allowance
 - **Context-aware**: `Acquire(ctx)` returns on cancellation
-- **No goroutines**: Refill on demand, no background ticker
-- **Dynamic**: `SetRate()`, `SetBurst()` at runtime
+- **No goroutines**: Refill on demand, no background ticker; no polling, no busy-loop
+- **Dynamic**: `SetRate()` / `SetBurst()` at runtime. The interval since the
+  last accounting is credited at the **old** rate *before* the change takes
+  effect — a rate increase never retroactively over-credits the past
+  interval. The change then **wakes any `Acquire` that is waiting** (via an
+  internal reconfigure channel — a timer, `Stop`ped/drained on wake) so it
+  recomputes against the new configuration instead of sleeping out the stale
+  timer. `SetRate(0)` (unlimited) therefore releases a waiter promptly.
+- **Testable**: `WithClock(func() time.Time)` for a deterministic clock
 - **Composable**: `NewMultiLimiter(perProvider, global)` for layered limits
 
 ### Test Coverage Required
 - Rate enforcement over time
 - Burst allowance
-- Context cancellation during wait
+- Context cancellation during wait — still wins after a reconfigure
+- `SetRate(0)` wakes a waiting `Acquire`; a rate increase wakes it and it recomputes (does not wait out the old timer)
+- Rate change credits the elapsed interval at the old rate (no retroactive over-credit)
 - TryAcquire non-blocking behavior
 - MultiLimiter all-or-nothing semantics
 
@@ -391,7 +407,7 @@ All tests use synthetic providers / `httptest` — **no real network**.
 | G | Cache max capacity enforced |
 | H | Cache LRU eviction |
 | I | Cache TTL expiry |
-| J | Rate limiter context cancellation |
+| J | Rate limiter: context cancellation during wait; `SetRate(0)` / rate increase wakes and recomputes a waiting `Acquire`; a rate change credits the elapsed interval at the old rate (deterministic clock) |
 | K | Context: nil context → `InvalidConfig`; already-canceled / past-deadline → typed error, provider not invoked (passive + active) |
 | L | Typed errors detectable via `errors.Is` / `errors.As` |
 | M | Disclosure classification correct |
@@ -399,6 +415,7 @@ All tests use synthetic providers / `httptest` — **no real network**.
 | O | Capability gate: an undeclared capability is rejected by the framework (`UnsupportedCapabilityError`, invocation count 0) on both pipelines, and — for active — before the ScopeGuard is consulted |
 | P | Contract packages contain no runnable provider that can fabricate a result (source scan) |
 | Q | `Registry.Register` rejects a nil / typed-nil provider without panicking |
+| R | `ProviderMeta.Capabilities` validated as a set: empty/unknown and duplicate entries rejected at `Validate` / `Register`; multiple unique + custom string capabilities accepted; a provider with an invalid capability set never registers, so its invocation count stays 0 |
 
 ---
 
@@ -428,7 +445,7 @@ All tests use synthetic providers / `httptest` — **no real network**.
 
 1. **One provider per package** under `internal/osint/providers/<name>/`
 2. **Implement the correct runner** — `PassiveRunner` (`Lookup`) or `ActiveRunner` (`Probe`); run it through `Executor`, never directly
-3. **Declare accurate metadata** — `ActivityClass`, `DisclosureClass`, `RequiresScope` (coherent per `ProviderMeta.Validate`), and **every** capability you handle in `Capabilities` (the gate rejects an undeclared one before `Lookup` / `Probe`)
+3. **Declare accurate metadata** — `ActivityClass`, `DisclosureClass`, `RequiresScope` (coherent per `ProviderMeta.Validate`), and **every** capability you handle in `Capabilities` as a non-empty, duplicate-free set (the gate rejects an undeclared one before `Lookup` / `Probe`; an empty/duplicate set fails registration)
 4. **Do not scope-check inside `Probe`** — the gate has already authorized the target
 5. **Use bounded cache** — `osint.NewCache(size)` per provider
 6. **Use rate limiter** — `osint.NewLimiter(rate, burst)` per provider

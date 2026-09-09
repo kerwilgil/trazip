@@ -233,6 +233,19 @@ func (m ProviderMeta) Validate() error {
 	if len(m.Capabilities) == 0 {
 		return &InvalidConfigError{Provider: m.ID, Field: "Capabilities", Reason: "at least one capability required"}
 	}
+	// Every capability must be a non-empty, unique identifier — the central
+	// capability gate treats ProviderMeta.Capabilities as the authoritative
+	// set. Custom string capabilities are allowed; there is no whitelist.
+	seen := make(map[Capability]struct{}, len(m.Capabilities))
+	for _, c := range m.Capabilities {
+		if c == CapabilityUnknown { // Capability("")
+			return &InvalidConfigError{Provider: m.ID, Field: "Capabilities", Reason: "capability must not be empty/unknown"}
+		}
+		if _, dup := seen[c]; dup {
+			return &InvalidConfigError{Provider: m.ID, Field: "Capabilities", Reason: fmt.Sprintf("duplicate capability %q", c)}
+		}
+		seen[c] = struct{}{}
+	}
 	if !m.ActivityClass.IsValid() {
 		return &InvalidConfigError{Provider: m.ID, Field: "ActivityClass", Reason: fmt.Sprintf("invalid activity class %q", m.ActivityClass)}
 	}
