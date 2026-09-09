@@ -295,30 +295,39 @@ func TestExecutorRejectsProvenanceIdentityMismatch(t *testing.T) {
 	}
 }
 
-// failingBeforeWorkProvider fails prior to any external work and returns no
-// provenance — the framework must NOT convert this into a provenance error.
-type failingBeforeWorkProvider struct{ meta ProviderMeta }
+// failingBeforeWorkProvider fails (for a DECLARED capability) prior to any
+// external work and returns no provenance — the framework must pass that
+// error through unchanged, not convert it into a provenance error.
+type failingBeforeWorkProvider struct {
+	meta  ProviderMeta
+	calls int
+}
 
 func (p *failingBeforeWorkProvider) Meta() ProviderMeta { return p.meta }
 
 func (p *failingBeforeWorkProvider) Lookup(ctx context.Context, capability Capability, input any) Result {
-	return Result{Err: &UnsupportedCapabilityError{Provider: p.meta.ID, Capability: capability}}
+	p.calls++
+	return Result{Err: &ExternalLookupFailedError{Provider: p.meta.ID, Query: "q", Reason: "upstream down"}}
 }
 
 func TestExecutorPassesThroughPreExecutionFailure(t *testing.T) {
 	reg := NewRegistry()
-	mustRegister(t, reg, &failingBeforeWorkProvider{meta: ProviderMeta{
+	p := &failingBeforeWorkProvider{meta: ProviderMeta{
 		ID:              "fb.passive",
 		Name:            "Fails Before Work",
 		Capabilities:    []Capability{CapabilityRDAP},
 		ActivityClass:   ActivityPassive,
 		DisclosureClass: DisclosurePassive,
-	}})
+	}}
+	mustRegister(t, reg, p)
 	ex := NewExecutor(reg)
 
-	res := ex.ExecutePassive(context.Background(), "fb.passive", CapabilityCVE, nil)
-	if !IsUnsupportedCapability(res.Err) {
-		t.Errorf("want the provider's own UnsupportedCapability error, got %v", res.Err)
+	res := ex.ExecutePassive(context.Background(), "fb.passive", CapabilityRDAP, nil)
+	if !IsExternalLookupFailed(res.Err) {
+		t.Errorf("want the provider's own ExternalLookupFailed error, got %v", res.Err)
+	}
+	if p.calls != 1 {
+		t.Errorf("provider calls = %d, want 1", p.calls)
 	}
 	if IsInvalidProvenance(res.Err) {
 		t.Error("a pre-execution failure must not be reclassified as a provenance error")

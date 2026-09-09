@@ -39,10 +39,15 @@ internal/osint/
 ├── ratelimit.go       # Token-bucket limiter (context-aware, cancelable)
 ├── scope.go           # ScopeGuard wrapper (fail-closed, wraps internal/scope)
 ├── passive/
-│   └── provider.go    # PassiveRunner alias + capability constants + example skeleton
+│   └── provider.go    # PassiveRunner alias + capability constants (contract only, no runnable provider)
 └── active/
-    └── provider.go    # ActiveRunner alias + capability constants + example skeleton
+    └── provider.go    # ActiveRunner alias + capability constants (contract only, no runnable provider)
 ```
+
+> The `passive/` and `active/` packages are **contracts only** — a type
+> alias and the capability constants. They ship **no runnable provider**:
+> a worked example lives in the tests and in this document, never in the
+> production tree, so nothing there can return a fabricated success.
 
 ### Key Design Principles
 
@@ -92,7 +97,8 @@ active ⇒ `ActiveRunner`).
 ### Runtime enforcement (`Executor`)
 - `ExecutePassive` rejects any provider whose `ActivityClass != ActivityPassive` — the provider is **not** invoked.
 - `ExecuteActive` rejects a nil guard, an unauthorized guard, or an out-of-scope target — the provider is **not** invoked.
-- Both check `ctx.Err()` first and validate returned provenance last.
+- Either pipeline rejects a capability not in `ProviderMeta.Capabilities` **before** invocation (and, for active, before the ScopeGuard).
+- Both inspect the context first and validate returned provenance last.
 
 ---
 
@@ -161,6 +167,19 @@ _ = guard.Authorize("LAN audit", []string{"192.168.1.0/24"})
 res = ex.ExecuteActive(ctx, guard, "portscan.local", osint.CapabilityPortScan, "192.168.1.10", nil)
 ```
 
+**Fixed check order** (every step fail-closed; an invalid request never
+reaches the ScopeGuard or the provider):
+
+1. **context** — `nil` context → `InvalidConfigError`; already-done context → `ErrCanceled` / `ErrDeadlineExceeded`
+2. **provider** — unknown ID → `ErrProviderNotFound`
+3. **pipeline** — wrong pipeline for the provider's `ActivityClass` → `ActivityViolationError`
+4. **capability** — requested capability not in `ProviderMeta.Capabilities` → `UnsupportedCapabilityError` (checked **before** the scope gate, so no active interaction is attempted for an undeclared capability)
+5. **active scope** *(active only)* — `nil` guard / unauthorized guard → `ScopeRequiredError`; target out of scope → `ScopeDeniedError`
+6. **invocation** — only now is `Lookup` / `Probe` called
+7. **provenance** — a successful `Result` must carry provenance that exactly describes this provider and request (see below), else `InvalidProvenanceError` with `Data` dropped
+
+At every step before 6 the provider's code is **not** executed.
+
 ### Result
 ```go
 type Result struct {
@@ -225,9 +244,21 @@ type Provenance struct {
 `Provenance.Validate()` requires a successful result to carry, at minimum,
 `ProviderID`, `ProviderName`, `Capability`, a valid `ActivityClass` and
 `DisclosureClass`, and a non-empty `RetrievedAt`, with activity/disclosure
-coherent. `Executor` runs this check and additionally verifies the
-provenance names the provider and pipeline it actually ran; a mismatch is
-converted to a fail-closed `InvalidProvenanceError`.
+coherent.
+
+`Executor` runs that check **and** then verifies the provenance describes
+the execution *exactly* — every one of:
+
+| Provenance field | must equal |
+|---|---|
+| `ProviderID` | registered `ProviderMeta.ID` |
+| `ProviderName` | registered `ProviderMeta.Name` |
+| `Capability` | the capability passed to `ExecutePassive` / `ExecuteActive` |
+| `ActivityClass` | registered `ProviderMeta.ActivityClass` |
+| `DisclosureClass` | registered `ProviderMeta.DisclosureClass` |
+
+Any mismatch — even with individually valid fields — is converted to a
+fail-closed `InvalidProvenanceError` and the `Data` is dropped.
 
 Future extensions (V1.5-3+):
 - `EvidenceClass`: `OBSERVED` | `POSSIBLE_CONTEXT` | `NOT_PROVEN`
@@ -298,8 +329,9 @@ Cache.Get(key string) (any, bool)  // non-blocking
 ```
 
 ### Cancellation Rules
-- `Executor` checks `ctx.Err()` before invoking any provider — an already
+- `Executor` inspects the context before invoking any provider — an already
   done context means the provider is never called.
+- `nil` context → `InvalidConfigError` (`IsInvalidConfig` true); rejected fail-closed rather than left to panic.
 - Context cancellation → `ErrCanceled` (wrapping `context.Canceled`); `IsCanceled` is true.
 - Deadline exceeded → `ErrDeadlineExceeded` (wrapping `context.DeadlineExceeded`); `IsDeadlineExceeded` is true.
 - Provider must NOT retry infinitely on cancellation, and must NOT swallow context errors.
@@ -355,15 +387,18 @@ All tests use synthetic providers / `httptest` — **no real network**.
 | C | ScopeGuard fail-closed (nil guard, unauthorized) |
 | D | Out-of-scope active target rejected before provider invocation |
 | E | Authorized synthetic active target allowed |
-| F | Provenance enforced: successful result without valid provenance is converted to a fail-closed error; pre-execution failures are exempt |
+| F | Provenance enforced: a successful result whose provenance is missing, or whose `ProviderID` / `ProviderName` / `Capability` / `ActivityClass` / `DisclosureClass` does not match the registered provider and the request, is converted to a fail-closed error with `Data` dropped; pre-execution failures are exempt |
 | G | Cache max capacity enforced |
 | H | Cache LRU eviction |
 | I | Cache TTL expiry |
 | J | Rate limiter context cancellation |
-| K | Context cancellation / deadline: provider not invoked on a dead context (passive + active) |
+| K | Context: nil context → `InvalidConfig`; already-canceled / past-deadline → typed error, provider not invoked (passive + active) |
 | L | Typed errors detectable via `errors.Is` / `errors.As` |
 | M | Disclosure classification correct |
 | N | No unexpected network in tests |
+| O | Capability gate: an undeclared capability is rejected by the framework (`UnsupportedCapabilityError`, invocation count 0) on both pipelines, and — for active — before the ScopeGuard is consulted |
+| P | Contract packages contain no runnable provider that can fabricate a result (source scan) |
+| Q | `Registry.Register` rejects a nil / typed-nil provider without panicking |
 
 ---
 
@@ -393,13 +428,13 @@ All tests use synthetic providers / `httptest` — **no real network**.
 
 1. **One provider per package** under `internal/osint/providers/<name>/`
 2. **Implement the correct runner** — `PassiveRunner` (`Lookup`) or `ActiveRunner` (`Probe`); run it through `Executor`, never directly
-3. **Declare accurate metadata** — `ActivityClass`, `DisclosureClass`, `RequiresScope` (coherent per `ProviderMeta.Validate`)
+3. **Declare accurate metadata** — `ActivityClass`, `DisclosureClass`, `RequiresScope` (coherent per `ProviderMeta.Validate`), and **every** capability you handle in `Capabilities` (the gate rejects an undeclared one before `Lookup` / `Probe`)
 4. **Do not scope-check inside `Probe`** — the gate has already authorized the target
 5. **Use bounded cache** — `osint.NewCache(size)` per provider
 6. **Use rate limiter** — `osint.NewLimiter(rate, burst)` per provider
 7. **Respect context** — all blocking calls accept `ctx`
 8. **Return typed errors** — wrap sentinel errors with context
-9. **Preserve provenance** — `osint.NewProvenance(...)` on every successful result; it must name your provider and pipeline
+9. **Preserve provenance exactly** — `osint.NewProvenance(...)` on every successful result; its `ProviderID` / `ProviderName` / `Capability` / `ActivityClass` / `DisclosureClass` must equal your registered metadata and the requested capability, or the gate drops the result
 10. **No secrets in logs** — sanitize endpoints, no API keys in output
 11. **Tests with httptest** — no real Internet in unit tests
 12. **Document disclosure** — what data leaves, where it goes
@@ -428,7 +463,9 @@ git diff --check
 - ✅ Explicit disclosure declaration per provider, coherent with activity class
 - ✅ Active execution requires an authorized Scope Guard — enforced by `Executor`, not the provider (fail-closed)
 - ✅ A provider cannot be run through the wrong pipeline, or at all, except via `Executor`
-- ✅ A successful result without valid provenance is rejected fail-closed
+- ✅ A capability the provider did not declare is rejected before the provider (and the ScopeGuard) is reached
+- ✅ A successful result whose provenance does not exactly match the provider and request is rejected fail-closed, `Data` dropped
+- ✅ The contract packages ship no runnable provider — no fabricated "example" results
 - ✅ No unbounded caches
 - ✅ No background polling goroutines
 - ✅ No secrets in code/fixtures/logs
@@ -448,6 +485,6 @@ git diff --check
 | `internal/osint/cache.go` | Bounded LRU+TTL cache |
 | `internal/osint/ratelimit.go` | Token-bucket limiter (context-aware) |
 | `internal/osint/scope.go` | ScopeGuard wrapper (fail-closed) |
-| `internal/osint/passive/provider.go` | PassiveRunner alias + capabilities + example skeleton |
-| `internal/osint/active/provider.go` | ActiveRunner alias + capabilities + example skeleton |
+| `internal/osint/passive/provider.go` | PassiveRunner alias + capability constants — contract only, no runnable provider |
+| `internal/osint/active/provider.go` | ActiveRunner alias + capability constants — contract only, no runnable provider |
 | `docs/OSINT_FOUNDATION.md` | This document |

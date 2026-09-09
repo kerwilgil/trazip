@@ -76,7 +76,7 @@ func NewRegistry() *Registry {
 // the runner interface it implements (passive => PassiveRunner, active =>
 // ActiveRunner).
 func (r *Registry) Register(p Provider) error {
-	if p == nil {
+	if isNilProvider(p) {
 		return fmt.Errorf("registry: nil provider")
 	}
 
