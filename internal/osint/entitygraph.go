@@ -33,14 +33,15 @@ func IsEntityGraphError(err error) bool {
 
 // EntityGraph holds entities and relations with deterministic ordering.
 type EntityGraph struct {
-	mu           sync.RWMutex
-	entities     map[string]Entity
-	relations    map[string]EntityRelation
-	byKind       map[EntityKind][]string
-	byFrom       map[string][]string
-	byTo         map[string][]string
-	maxEntities  int
-	maxRelations int
+	mu            sync.RWMutex
+	entities      map[string]Entity
+	relations     map[string]EntityRelation
+	byKind        map[EntityKind][]string
+	byFrom        map[string][]string
+	byTo          map[string][]string
+	byRelationID  map[string]string // relation ID -> relation key
+	maxEntities   int
+	maxRelations  int
 }
 
 // NewEntityGraph creates an empty entity graph with default bounds.
@@ -62,6 +63,7 @@ func NewEntityGraphWithBounds(maxEntities, maxRelations int) *EntityGraph {
 		byKind:       make(map[EntityKind][]string),
 		byFrom:       make(map[string][]string),
 		byTo:         make(map[string][]string),
+		byRelationID: make(map[string]string),
 		maxEntities:  maxEntities,
 		maxRelations: maxRelations,
 	}
@@ -95,7 +97,8 @@ func (g *EntityGraph) AddEntity(e Entity) error {
 }
 
 // AddRelation adds a relation to the graph. Validates from/to exist, evidence class,
-// and no duplicate relation with same from/to/kind. Returns error if validation fails.
+// and no duplicate relation with same from/to/kind/id. Returns error if validation fails.
+// Enforces global relation ID uniqueness: same ID with different content is rejected.
 func (g *EntityGraph) AddRelation(r EntityRelation) error {
 	if err := r.Validate(); err != nil {
 		return &EntityGraphError{Op: "AddRelation", Err: err}
@@ -111,6 +114,17 @@ func (g *EntityGraph) AddRelation(r EntityRelation) error {
 		return &EntityGraphError{Op: "AddRelation", Err: fmt.Errorf("to entity %q does not exist", r.To)}
 	}
 
+	// Check global relation ID uniqueness
+	if existingKey, idExists := g.byRelationID[r.ID]; idExists {
+		// ID already exists — check if content is identical (idempotent) or conflicting
+		if existingRel, ok := g.relations[existingKey]; ok {
+			if relationsEqual(existingRel, r) {
+				return nil // idempotent
+			}
+		}
+		return &EntityGraphError{Op: "AddRelation", Err: fmt.Errorf("relation ID %q already exists with different content", r.ID)}
+	}
+
 	key := relationKey(r.ID, r.From, r.To, r.Kind)
 	if _, exists := g.relations[key]; exists {
 		return &EntityGraphError{Op: "AddRelation", Err: fmt.Errorf("relation %q already exists", key)}
@@ -124,6 +138,7 @@ func (g *EntityGraph) AddRelation(r EntityRelation) error {
 	g.relations[key] = cloned
 	g.byFrom[r.From] = append(g.byFrom[r.From], key)
 	g.byTo[r.To] = append(g.byTo[r.To], key)
+	g.byRelationID[r.ID] = key
 	return nil
 }
 
@@ -321,6 +336,18 @@ func entitiesEqual(a, b Entity) bool {
 		}
 	}
 	return true
+}
+
+// relationsEqual reports whether two relations have identical content.
+func relationsEqual(a, b EntityRelation) bool {
+	return a.ID == b.ID &&
+		a.From == b.From &&
+		a.To == b.To &&
+		a.Kind == b.Kind &&
+		a.Directed == b.Directed &&
+		a.EvidenceClass == b.EvidenceClass &&
+		a.ProvenanceRef == b.ProvenanceRef &&
+		a.Label == b.Label
 }
 
 // sortStrings sorts a string slice in place.

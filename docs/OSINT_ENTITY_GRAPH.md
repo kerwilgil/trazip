@@ -114,11 +114,11 @@ Tests enforce: rejection at limit, no growth beyond limit.
 | Method | Description |
 |--------|-------------|
 | `AddEntity(Entity) error` | Idempotent if identical; rejects conflicting duplicate |
-| `AddRelation(EntityRelation) error` | Validates from/to exist, no duplicate key, evidence class valid |
+| `AddRelation(EntityRelation) error` | Validates from/to exist, no duplicate key, evidence class valid, **OBSERVED requires non-empty ProvenanceRef** |
 | `Entity(id) (Entity, bool)` | Returns clone |
-| `Relation(from, to, kind) (EntityRelation, bool)` | Returns clone |
+| `Relation(id, from, to, kind) (EntityRelation, bool)` | Returns clone |
 | `Entities() []Entity` | Deterministic (sorted by ID) |
-| `Relations() []EntityRelation` | Deterministic (sorted by from→to→kind) |
+| `Relations() []EntityRelation` | Deterministic (sorted by from→to→kind→ID) |
 | `EntitiesByKind(kind) []Entity` | Filtered + sorted |
 | `RelationsByEvidenceClass(ec) []EntityRelation` | Filtered + sorted |
 | `Neighbors(id) []Entity` | Incoming + outgoing, deduped, sorted |
@@ -130,7 +130,7 @@ Tests enforce: rejection at limit, no growth beyond limit.
 
 - Same ID, identical content → no-op (idempotent).
 - Same ID, different content → **error** (no silent overwrite).
-- Relation key = `from\x00to\x00kind` → duplicate rejected.
+- Relation key = `from\x00to\x00kind\x00id` → duplicate rejected. **ID tiebreaker ensures total ordering and uniqueness for parallel edges with same from/to/kind.**
 
 ### Dangling Edge Policy
 
@@ -261,9 +261,11 @@ Classification comes **explicitly from the input**.
 
 ## Provenance
 
-`EvidenceObserved` relations SHOULD carry a `ProvenanceRef` linking to a real
+`EvidenceObserved` relations **MUST** carry a non-empty `ProvenanceRef` linking to a real
 `osint.Provenance` (provider, capability, retrievedAt, endpoint, confidence).
-Relations without provenance ref are accepted but UI shows "No disponible".
+**Absence of ProvenanceRef for OBSERVED is a validation error — the relation is rejected at `AddRelation` time (fail-closed).**
+`EvidencePossibleContext` and `EvidenceNotProven` do not require a provenance reference.
+UI never presents an OBSERVED relation without provenance as a valid runtime state.
 
 No fake timestamps, no fabricated provenance.
 
@@ -306,6 +308,14 @@ they will populate the graph via explicit DTOs — never via inference.
 - `TestEntityGraph_EvidenceClassBehavior` (no auto-promotion)
 - `TestEntityGraph_SelfEdgeAllowed`
 - `TestEntityGraph_AttributesDeepCopy`
+- `TestEntityGraph_RelationID_ConflictSameIDDifferentContent`
+- `TestEntityGraph_RelationID_ConflictSameIDDifferentFrom`
+- `TestEntityGraph_RelationID_ConflictSameIDDifferentTo`
+- `TestEntityGraph_RelationID_ConflictSameIDDifferentKind`
+- `TestEntityGraph_RelationID_ConflictSameIDDifferentEvidenceClass`
+- `TestEntityGraph_RelationID_ConflictSameIDDifferentProvenance`
+- `TestEntityGraph_OBSERVED_RequiresProvenanceRef`
+- `TestEntityGraph_EvidenceUnknown_Rejected`
 
 ### Frontend (Vitest)
 
@@ -314,7 +324,7 @@ they will populate the graph via explicit DTOs — never via inference.
 - Entity kind descriptors completeness
 - `asEvidenceClass` / `asEntityKind` mapping
 - `normalizeEntity` / `normalizeRelation` defaults
-- `sortEntities` / `sortRelations` determinism
+- `sortEntities` / `sortRelations` determinism (includes ID tiebreaker)
 - `buildEntityGraphLayout`:
   - Deterministic coordinates
   - Missing endpoints / self-loops ignored
@@ -322,8 +332,17 @@ they will populate the graph via explicit DTOs — never via inference.
   - Undirected edges no levels
   - Minimum canvas size
 - `entityEdgeEndpoints` (identical nodes, edge centers)
-- `entityEdgeLaneOffsets` stable fan-out/in
+- `entityEdgeLaneOffsets` stable fan-out/in (uses relation ID in keys)
 - `filterEntities` / `filterRelations` (kind, evidence class, dangling)
+- `sortRelations` permutation determinism with ID tiebreaker
+- Parallel edges with same from/to/kind different IDs → distinct lane offsets
+- Filter integration alters derived render dataset
+- Fit uses `fitEntityGraphViewBox` and remains bounded
+- Entity selection resolves kind, value, ID, attributes, associated relations
+- Relation selection resolves evidence class, provenance ref
+- OBSERVED without provenance never presented as valid state
+- Empty runtime graph shows only empty state
+- No demo/fake nodes/edges in runtime
 
 ---
 

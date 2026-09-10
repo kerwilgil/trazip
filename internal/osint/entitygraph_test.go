@@ -155,9 +155,9 @@ func TestEntityGraph_AddRelation_DuplicateRejected(t *testing.T) {
 	require.NoError(t, g.AddEntity(Entity{ID: "e2", Kind: EntityKindDomain, Label: "Domain", Value: "example.com"}))
 	r := EntityRelation{ID: "r1", From: "e1", To: "e2", Kind: "k", EvidenceClass: EvidenceObserved, ProvenanceRef: "prov"}
 	require.NoError(t, g.AddRelation(r))
-	err := g.AddRelation(r)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "already exists")
+	// Adding identical relation with same ID and content is idempotent (no error)
+	require.NoError(t, g.AddRelation(r))
+	require.Equal(t, 1, g.RelationCount())
 }
 
 func TestEntityGraph_DeterministicOrdering(t *testing.T) {
@@ -354,4 +354,127 @@ func TestEntityGraph_AttributesDeepCopy(t *testing.T) {
 
 	e := g.Entities()[0]
 	require.Equal(t, "1", e.Attributes["a"], "entity attributes should be deep copied")
+}
+
+func TestEntityGraph_RelationID_ConflictSameIDDifferentContent(t *testing.T) {
+	g := NewEntityGraph()
+	require.NoError(t, g.AddEntity(Entity{ID: "e1", Kind: EntityKindIP, Label: "IP", Value: "1.1.1.1"}))
+	require.NoError(t, g.AddEntity(Entity{ID: "e2", Kind: EntityKindIP, Label: "IP2", Value: "2.2.2.2"}))
+	require.NoError(t, g.AddEntity(Entity{ID: "e3", Kind: EntityKindIP, Label: "IP3", Value: "3.3.3.3"}))
+
+	// Add first relation
+	r1 := EntityRelation{ID: "r1", From: "e1", To: "e2", Kind: "k", EvidenceClass: EvidenceObserved, ProvenanceRef: "prov1"}
+	require.NoError(t, g.AddRelation(r1))
+
+	// Try to add relation with same ID but different content (different from)
+	r2 := EntityRelation{ID: "r1", From: "e1", To: "e3", Kind: "k", EvidenceClass: EvidenceObserved, ProvenanceRef: "prov2"}
+	err := g.AddRelation(r2)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "already exists with different content")
+	require.Equal(t, 1, g.RelationCount())
+}
+
+func TestEntityGraph_RelationID_ConflictSameIDDifferentFrom(t *testing.T) {
+	g := NewEntityGraph()
+	require.NoError(t, g.AddEntity(Entity{ID: "e1", Kind: EntityKindIP, Label: "IP", Value: "1.1.1.1"}))
+	require.NoError(t, g.AddEntity(Entity{ID: "e2", Kind: EntityKindIP, Label: "IP2", Value: "2.2.2.2"}))
+	require.NoError(t, g.AddEntity(Entity{ID: "e3", Kind: EntityKindIP, Label: "IP3", Value: "3.3.3.3"}))
+
+	r1 := EntityRelation{ID: "r1", From: "e1", To: "e2", Kind: "k", EvidenceClass: EvidenceObserved, ProvenanceRef: "prov1"}
+	require.NoError(t, g.AddRelation(r1))
+
+	// Same ID, different from
+	r2 := EntityRelation{ID: "r1", From: "e3", To: "e2", Kind: "k", EvidenceClass: EvidenceObserved, ProvenanceRef: "prov2"}
+	err := g.AddRelation(r2)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "already exists with different content")
+}
+
+func TestEntityGraph_RelationID_ConflictSameIDDifferentTo(t *testing.T) {
+	g := NewEntityGraph()
+	require.NoError(t, g.AddEntity(Entity{ID: "e1", Kind: EntityKindIP, Label: "IP", Value: "1.1.1.1"}))
+	require.NoError(t, g.AddEntity(Entity{ID: "e2", Kind: EntityKindIP, Label: "IP2", Value: "2.2.2.2"}))
+	require.NoError(t, g.AddEntity(Entity{ID: "e3", Kind: EntityKindIP, Label: "IP3", Value: "3.3.3.3"}))
+
+	r1 := EntityRelation{ID: "r1", From: "e1", To: "e2", Kind: "k", EvidenceClass: EvidenceObserved, ProvenanceRef: "prov1"}
+	require.NoError(t, g.AddRelation(r1))
+
+	// Same ID, different to
+	r2 := EntityRelation{ID: "r1", From: "e1", To: "e3", Kind: "k", EvidenceClass: EvidenceObserved, ProvenanceRef: "prov2"}
+	err := g.AddRelation(r2)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "already exists with different content")
+}
+
+func TestEntityGraph_RelationID_ConflictSameIDDifferentKind(t *testing.T) {
+	g := NewEntityGraph()
+	require.NoError(t, g.AddEntity(Entity{ID: "e1", Kind: EntityKindIP, Label: "IP", Value: "1.1.1.1"}))
+	require.NoError(t, g.AddEntity(Entity{ID: "e2", Kind: EntityKindIP, Label: "IP2", Value: "2.2.2.2"}))
+
+	r1 := EntityRelation{ID: "r1", From: "e1", To: "e2", Kind: "k1", EvidenceClass: EvidenceObserved, ProvenanceRef: "prov1"}
+	require.NoError(t, g.AddRelation(r1))
+
+	// Same ID, different kind
+	r2 := EntityRelation{ID: "r1", From: "e1", To: "e2", Kind: "k2", EvidenceClass: EvidenceObserved, ProvenanceRef: "prov2"}
+	err := g.AddRelation(r2)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "already exists with different content")
+}
+
+func TestEntityGraph_RelationID_ConflictSameIDDifferentEvidenceClass(t *testing.T) {
+	g := NewEntityGraph()
+	require.NoError(t, g.AddEntity(Entity{ID: "e1", Kind: EntityKindIP, Label: "IP", Value: "1.1.1.1"}))
+	require.NoError(t, g.AddEntity(Entity{ID: "e2", Kind: EntityKindIP, Label: "IP2", Value: "2.2.2.2"}))
+
+	r1 := EntityRelation{ID: "r1", From: "e1", To: "e2", Kind: "k", EvidenceClass: EvidenceObserved, ProvenanceRef: "prov1"}
+	require.NoError(t, g.AddRelation(r1))
+
+	// Same ID, different evidence class
+	r2 := EntityRelation{ID: "r1", From: "e1", To: "e2", Kind: "k", EvidenceClass: EvidencePossibleContext}
+	err := g.AddRelation(r2)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "already exists with different content")
+}
+
+func TestEntityGraph_RelationID_ConflictSameIDDifferentProvenance(t *testing.T) {
+	g := NewEntityGraph()
+	require.NoError(t, g.AddEntity(Entity{ID: "e1", Kind: EntityKindIP, Label: "IP", Value: "1.1.1.1"}))
+	require.NoError(t, g.AddEntity(Entity{ID: "e2", Kind: EntityKindIP, Label: "IP2", Value: "2.2.2.2"}))
+
+	r1 := EntityRelation{ID: "r1", From: "e1", To: "e2", Kind: "k", EvidenceClass: EvidenceObserved, ProvenanceRef: "prov1"}
+	require.NoError(t, g.AddRelation(r1))
+
+	// Same ID, different provenance
+	r2 := EntityRelation{ID: "r1", From: "e1", To: "e2", Kind: "k", EvidenceClass: EvidenceObserved, ProvenanceRef: "prov2"}
+	err := g.AddRelation(r2)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "already exists with different content")
+}
+
+func TestEntityGraph_OBSERVED_RequiresProvenanceRef(t *testing.T) {
+	g := NewEntityGraph()
+	require.NoError(t, g.AddEntity(Entity{ID: "e1", Kind: EntityKindIP, Label: "IP", Value: "1.1.1.1"}))
+	require.NoError(t, g.AddEntity(Entity{ID: "e2", Kind: EntityKindIP, Label: "IP2", Value: "2.2.2.2"}))
+
+	// OBSERVED with valid provenance -> PASS
+	r1 := EntityRelation{ID: "r1", From: "e1", To: "e2", Kind: "k", EvidenceClass: EvidenceObserved, ProvenanceRef: "prov1"}
+	require.NoError(t, g.AddRelation(r1))
+
+	// OBSERVED without provenance -> REJECT
+	r2 := EntityRelation{ID: "r2", From: "e1", To: "e2", Kind: "k", EvidenceClass: EvidenceObserved, ProvenanceRef: ""}
+	err := g.AddRelation(r2)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "OBSERVED requires non-empty ProvenanceRef")
+}
+
+func TestEntityGraph_EvidenceUnknown_Rejected(t *testing.T) {
+	g := NewEntityGraph()
+	require.NoError(t, g.AddEntity(Entity{ID: "e1", Kind: EntityKindIP, Label: "IP", Value: "1.1.1.1"}))
+	require.NoError(t, g.AddEntity(Entity{ID: "e2", Kind: EntityKindIP, Label: "IP2", Value: "2.2.2.2"}))
+
+	// EvidenceUnknown should be rejected
+	r := EntityRelation{ID: "r1", From: "e1", To: "e2", Kind: "k", EvidenceClass: EvidenceUnknown, ProvenanceRef: "prov1"}
+	err := g.AddRelation(r)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid evidence class")
 }

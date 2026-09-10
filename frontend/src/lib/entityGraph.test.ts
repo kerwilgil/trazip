@@ -214,6 +214,29 @@ describe('sortRelations', () => {
     ];
     expect(sortRelations(list).map((r) => r.id)).toEqual(['r1', 'r2', 'r3']);
   });
+
+  it('incluye ID como tiebreaker para edges paralelos con mismo from/to/kind', () => {
+    const list = [
+      { id: 'r2', from: 'e1', to: 'e2', kind: 'k', directed: true, evidenceClass: 'observed' as const, provenanceRef: '', label: '' },
+      { id: 'r1', from: 'e1', to: 'e2', kind: 'k', directed: true, evidenceClass: 'observed' as const, provenanceRef: '', label: '' },
+    ];
+    // r1 debe ir antes que r2 porque 'r1' < 'r2' lexicográficamente
+    expect(sortRelations(list).map((r) => r.id)).toEqual(['r1', 'r2']);
+  });
+
+  it('permutación del mismo conjunto produce el mismo orden (ID tiebreaker)', () => {
+    const base = [
+      { id: 'r2', from: 'e1', to: 'e2', kind: 'k', directed: true, evidenceClass: 'observed' as const, provenanceRef: '', label: '' },
+      { id: 'r1', from: 'e1', to: 'e2', kind: 'k', directed: true, evidenceClass: 'observed' as const, provenanceRef: '', label: '' },
+      { id: 'r3', from: 'e2', to: 'e3', kind: 'k', directed: true, evidenceClass: 'observed' as const, provenanceRef: '', label: '' },
+    ];
+    const perm1 = [...base].sort(() => Math.random() - 0.5);
+    const perm2 = [...base].sort(() => Math.random() - 0.5);
+    const sorted1 = sortRelations(perm1).map((r) => r.id);
+    const sorted2 = sortRelations(perm2).map((r) => r.id);
+    expect(sorted1).toEqual(sorted2);
+    expect(sorted1).toEqual(['r1', 'r2', 'r3']);
+  });
 });
 
 describe('buildEntityGraphLayout', () => {
@@ -327,9 +350,35 @@ describe('entityEdgeLaneOffsets', () => {
       { id: 'r3', from: 'e4', to: 'e2', kind: 'k', directed: true, evidenceClass: 'observed' as const, provenanceRef: '', label: '' },
     ];
     const lanes = entityEdgeLaneOffsets(relations);
-    expect(lanes.has('e1-e2-k')).toBe(true);
-    expect(lanes.has('e1-e3-k')).toBe(true);
-    expect(lanes.has('e4-e2-k')).toBe(true);
+    expect(lanes.has('e1-e2-k-r1')).toBe(true);
+    expect(lanes.has('e1-e3-k-r2')).toBe(true);
+    expect(lanes.has('e4-e2-k-r3')).toBe(true);
+  });
+
+  it('edges paralelos con mismo from/to/kind pero distintos IDs tienen lanes distintos', () => {
+    const relations = [
+      { id: 'r1', from: 'e1', to: 'e2', kind: 'k', directed: true, evidenceClass: 'observed' as const, provenanceRef: '', label: '' },
+      { id: 'r2', from: 'e1', to: 'e2', kind: 'k', directed: true, evidenceClass: 'observed' as const, provenanceRef: '', label: '' },
+    ];
+    const lanes = entityEdgeLaneOffsets(relations);
+    expect(lanes.has('e1-e2-k-r1')).toBe(true);
+    expect(lanes.has('e1-e2-k-r2')).toBe(true);
+    // Las lanes deben ser distintas (offsets diferentes)
+    expect(lanes.get('e1-e2-k-r1')).not.toBe(lanes.get('e1-e2-k-r2'));
+  });
+
+  it('orden de inserción no afecta lane offsets (determinista)', () => {
+    const relations1 = [
+      { id: 'r1', from: 'e1', to: 'e2', kind: 'k', directed: true, evidenceClass: 'observed' as const, provenanceRef: '', label: '' },
+      { id: 'r2', from: 'e1', to: 'e3', kind: 'k', directed: true, evidenceClass: 'observed' as const, provenanceRef: '', label: '' },
+    ];
+    const relations2 = [
+      { id: 'r2', from: 'e1', to: 'e3', kind: 'k', directed: true, evidenceClass: 'observed' as const, provenanceRef: '', label: '' },
+      { id: 'r1', from: 'e1', to: 'e2', kind: 'k', directed: true, evidenceClass: 'observed' as const, provenanceRef: '', label: '' },
+    ];
+    const lanes1 = entityEdgeLaneOffsets(relations1);
+    const lanes2 = entityEdgeLaneOffsets(relations2);
+    expect(lanes1).toEqual(lanes2);
   });
 });
 

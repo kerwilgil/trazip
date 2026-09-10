@@ -223,11 +223,11 @@ export function normalizeRelation(raw: {
   };
 }
 
-/** Sorted, de-duplicated relation list. */
+/** Sorted, de-duplicated relation list. Total ordering: from → to → kind → ID. */
 export function sortRelations(list: OsintRelation[]): OsintRelation[] {
   return [...list].sort((a, b) => {
-    const ka = a.from + '\0' + a.to + '\0' + a.kind;
-    const kb = b.from + '\0' + b.to + '\0' + b.kind;
+    const ka = a.from + '\0' + a.to + '\0' + a.kind + '\0' + a.id;
+    const kb = b.from + '\0' + b.to + '\0' + b.kind + '\0' + b.id;
     return ka.localeCompare(kb);
   });
 }
@@ -497,7 +497,7 @@ export function entityEdgeLaneOffsets(relations: OsintRelation[]): Map<string, n
     incoming.set(rel.to, [...(incoming.get(rel.to) ?? []), rel]);
   }
   const sortRels = (items: OsintRelation[]) =>
-    items.sort((a, b) => a.to.localeCompare(b.to) || a.from.localeCompare(b.from));
+    items.sort((a, b) => a.to.localeCompare(b.to) || a.from.localeCompare(b.from) || a.id.localeCompare(b.id));
   for (const items of outgoing.values()) sortRels(items);
   for (const items of incoming.values()) sortRels(items);
 
@@ -507,7 +507,7 @@ export function entityEdgeLaneOffsets(relations: OsintRelation[]): Map<string, n
   for (const rel of relations) {
     const out = centred(outgoing.get(rel.from) ?? [], rel);
     const inw = centred(incoming.get(rel.to) ?? [], rel);
-    lane.set(`${rel.from}-${rel.to}-${rel.kind}`, (out + inw) * 6);
+    lane.set(`${rel.from}-${rel.to}-${rel.kind}-${rel.id}`, (out + inw) * 6);
   }
   return lane;
 }

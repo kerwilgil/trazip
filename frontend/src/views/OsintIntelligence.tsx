@@ -23,6 +23,7 @@ import {
   entityEdgeEndpoints,
   entityEdgeLaneOffsets,
   entityGraphViewBox,
+  fitEntityGraphViewBox,
   filterEntities,
   filterRelations,
   type EntityGraphFilters,
@@ -101,9 +102,29 @@ export default function OsintIntelligence() {
   const emptyEntities: OsintEntity[] = [];
   const emptyRelations: OsintRelation[] = [];
 
+  // Apply filters to derive renderable data
+  const filteredEntities = useMemo(
+    () => filterEntities(emptyEntities, filters),
+    [emptyEntities, filters],
+  );
+  const entitySet = useMemo(
+    () => new Set(filteredEntities.map((e) => e.id)),
+    [filteredEntities],
+  );
+  const filteredRelations = useMemo(
+    () => filterRelations(emptyRelations, filters, entitySet),
+    [emptyRelations, filters, entitySet],
+  );
+
   const layout = useMemo(
-    () => buildEntityGraphLayout(emptyEntities, emptyRelations),
-    [],
+    () => buildEntityGraphLayout(filteredEntities, filteredRelations),
+    [filteredEntities, filteredRelations],
+  );
+
+  // Pre-compute lane offsets for all filtered relations (batch processing)
+  const laneOffsets = useMemo(
+    () => entityEdgeLaneOffsets(filteredRelations),
+    [filteredRelations],
   );
 
   const handleZoomIn = () => {
@@ -116,6 +137,17 @@ export default function OsintIntelligence() {
     const next = clampEntityGraphZoom(graphZoom - ENTITY_GRAPH_ZOOM_STEP);
     setGraphZoom(next);
     setGraphViewBox(entityGraphViewBox(layout.width, layout.height, next));
+  };
+
+  const handleFitView = () => {
+    // Use a reasonable container size for fit; in reality this would come from the container ref
+    const containerWidth = 800;
+    const containerHeight = 420;
+    const vb = fitEntityGraphViewBox(layout, containerWidth, containerHeight);
+    setGraphZoom(clampEntityGraphZoom(
+      Math.min(containerWidth / vb.width, containerHeight / vb.height)
+    ));
+    setGraphViewBox(vb);
   };
 
   const handleResetView = () => {
@@ -133,6 +165,100 @@ export default function OsintIntelligence() {
 
   const handleCanvasClick = () => {
     setSelection(EMPTY_SELECTION);
+  };
+
+  // Selection detail renderers
+  const renderEntityDetails = () => {
+    if (!selection.entityId) return null;
+    const entity = filteredEntities.find((e) => e.id === selection.entityId);
+    if (!entity) return null;
+    const kindDesc = ENTITY_KIND_DESCRIPTORS[entity.kind];
+    const relatedRelations = filteredRelations.filter((r) => r.from === entity.id || r.to === entity.id);
+    return (
+      <div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap', marginBottom: 8 }}>
+          <strong>{t('Entidad')}: {entity.id}</strong>
+          <span className={`tag ${kindDesc.tagClass}`}>{t(kindDesc.labelKey)}</span>
+        </div>
+        <div className="kv" style={{ marginBottom: 4 }}>
+          <span className="k">{t('Valor')}</span>
+          <span className="v mono">{entity.value}</span>
+        </div>
+        <div className="kv" style={{ marginBottom: 4 }}>
+          <span className="k">{t('ID')}</span>
+          <span className="v mono" style={{ fontSize: 10 }}>{entity.id}</span>
+        </div>
+        {Object.keys(entity.attributes).length > 0 && (
+          <div className="kv" style={{ marginBottom: 4 }}>
+            <span className="k">{t('Atributos')}</span>
+            <span className="v mono" style={{ fontSize: 10 }}>
+              {Object.entries(entity.attributes).map(([k, v]) => `${k}=${v}`).join(', ')}
+            </span>
+          </div>
+        )}
+        <div className="kv" style={{ marginBottom: 4 }}>
+          <span className="k">{t('Relaciones asociadas')}</span>
+          <span className="v" style={{ fontSize: 11 }}>
+            {relatedRelations.length === 0
+              ? t('Ninguna')
+              : relatedRelations.map((r) => (
+                  <span key={r.id} style={{ marginRight: 8, fontFamily: 'monospace', fontSize: 10 }}>
+                    {r.from} → {r.to} ({t(EVIDENCE_DESCRIPTORS[r.evidenceClass].labelKey)})
+                  </span>
+                ))}
+          </span>
+        </div>
+      </div>
+    );
+  };
+
+  const renderRelationDetails = () => {
+    if (!selection.relationId) return null;
+    const rel = filteredRelations.find((r) => r.id === selection.relationId);
+    if (!rel) return null;
+    const fromEntity = filteredEntities.find((e) => e.id === rel.from);
+    const toEntity = filteredEntities.find((e) => e.id === rel.to);
+    const desc = EVIDENCE_DESCRIPTORS[rel.evidenceClass];
+    return (
+      <div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap', marginBottom: 8 }}>
+          <strong>{t('Relación')}: {rel.id}</strong>
+          <span className={`tag ${desc.tagClass}`}>{t(desc.labelKey)}</span>
+        </div>
+        <div className="kv" style={{ marginBottom: 4 }}>
+          <span className="k">{t('Tipo')}</span>
+          <span className="v mono">{rel.kind}</span>
+        </div>
+        <div className="kv" style={{ marginBottom: 4 }}>
+          <span className="k">{t('Desde')}</span>
+          <span className="v">{rel.from}{fromEntity ? ` (${fromEntity.value})` : ''}</span>
+        </div>
+        <div className="kv" style={{ marginBottom: 4 }}>
+          <span className="k">{t('Hasta')}</span>
+          <span className="v">{rel.to}{toEntity ? ` (${toEntity.value})` : ''}</span>
+        </div>
+        <div className="kv" style={{ marginBottom: 4 }}>
+          <span className="k">{t('Dirigida')}</span>
+          <span className="v">{rel.directed ? t('Sí') : t('No')}</span>
+        </div>
+        <div className="kv" style={{ marginBottom: 4 }}>
+          <span className="k">{t('Evidencia')}</span>
+          <span className="v">{t(desc.labelKey)}</span>
+        </div>
+        <div className="kv" style={{ marginBottom: 4 }}>
+          <span className="k">{t('Provenance')}</span>
+          <span className="v mono" style={{ fontSize: 10 }}>
+            {rel.provenanceRef || t('No disponible')}
+          </span>
+        </div>
+        {rel.label && (
+          <div className="kv" style={{ marginBottom: 4 }}>
+            <span className="k">{t('Etiqueta')}</span>
+            <span className="v">{rel.label}</span>
+          </div>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -376,9 +502,9 @@ export default function OsintIntelligence() {
             onWheel={handleWheel}
             onClick={handleCanvasClick}
             role="img"
-            aria-label={emptyEntities.length === 0 ? t('No hay entidades OSINT para visualizar todavía.') : t('Grafo de entidades OSINT')}
+            aria-label={filteredEntities.length === 0 ? t('No hay entidades OSINT para visualizar todavía.') : t('Grafo de entidades OSINT')}
           >
-            {emptyEntities.length === 0 ? (
+            {filteredEntities.length === 0 ? (
               <div
                 className="empty"
                 style={{
@@ -421,13 +547,12 @@ export default function OsintIntelligence() {
                 </defs>
                 {/* Edges */}
                 <g className="graph-edges">
-                  {emptyRelations.map((rel) => {
+                  {filteredRelations.map((rel) => {
                     const fromNode = layout.nodes.find((n) => n.id === rel.from);
                     const toNode = layout.nodes.find((n) => n.id === rel.to);
                     if (!fromNode || !toNode) return null;
                     const endpoints = entityEdgeEndpoints(fromNode, toNode, layout.nodeWidth, layout.nodeHeight);
-                    const lanes = entityEdgeLaneOffsets([rel]);
-                    const laneOffset = lanes.get(`${rel.from}-${rel.to}-${rel.kind}`) ?? 0;
+                    const laneOffset = laneOffsets.get(`${rel.from}-${rel.to}-${rel.kind}-${rel.id}`) ?? 0;
                     const desc = EVIDENCE_DESCRIPTORS[rel.evidenceClass];
                     const curve = entityEdgeCurve(endpoints, laneOffset);
                     const isSelected = selection.relationId === rel.id;
@@ -456,7 +581,7 @@ export default function OsintIntelligence() {
                 </g>
                 {/* Nodes */}
                 <g className="graph-nodes">
-                  {emptyEntities.map((entity) => {
+                  {filteredEntities.map((entity) => {
                     const node = layout.nodes.find((n) => n.id === entity.id);
                     if (!node) return null;
                     const kindDesc = ENTITY_KIND_DESCRIPTORS[entity.kind];
@@ -575,7 +700,7 @@ export default function OsintIntelligence() {
               <button
                 className="btn"
                 type="button"
-                onClick={handleResetView}
+                onClick={handleFitView}
                 aria-label={t('Ajustar')}
                 style={{ padding: '4px 8px', fontSize: 12, lineHeight: 1 }}
               >
@@ -588,22 +713,8 @@ export default function OsintIntelligence() {
           {(selection.entityId || selection.relationId) && (
             <div className="card" style={{ marginTop: 12, background: 'var(--surface-2)' }}>
               <h4 style={{ marginBottom: 8 }}>{t('Detalles de selección')}</h4>
-              {selection.entityId && (
-                <div>
-                  <strong>{t('Entidad')}: {selection.entityId}</strong>
-                  <p className="dim" style={{ marginTop: 4 }}>
-                    {t('Selecciona una entidad en el grafo para ver sus atributos y relaciones.')}
-                  </p>
-                </div>
-              )}
-              {selection.relationId && (
-                <div>
-                  <strong>{t('Relación')}: {selection.relationId}</strong>
-                  <p className="dim" style={{ marginTop: 4 }}>
-                    {t('Selecciona una relación en el grafo para ver su evidencia y provenance.')}
-                  </p>
-                </div>
-              )}
+{selection.entityId && renderEntityDetails()}
+              {selection.relationId && renderRelationDetails()}
             </div>
           )}
         </div>
