@@ -7,6 +7,7 @@ import {
   ENTITY_GRAPH_MAX_ZOOM,
   buildEntityGraphLayout,
   clampEntityGraphZoom,
+  entityEdgeCurve,
   entityEdgeEndpoints,
   entityEdgeLaneOffsets,
   entityGraphViewBox,
@@ -327,6 +328,21 @@ describe('entityEdgeEndpoints', () => {
     for (const v of [ep.startX, ep.startY, ep.endX, ep.endY]) expect(Number.isFinite(v)).toBe(true);
   });
 
+  it('self-edge produce loop con propiedades isSelfLoop', () => {
+    const pos = { x: 100, y: 100 };
+    const ep = entityEdgeEndpoints(pos, pos, 160, 60);
+    expect(ep.isSelfLoop).toBe(true);
+    expect(ep.loopCenterX).toBeDefined();
+    expect(ep.loopCenterY).toBeDefined();
+    expect(ep.loopRadius).toBeDefined();
+    expect(Number.isFinite(ep.startX)).toBe(true);
+    expect(Number.isFinite(ep.startY)).toBe(true);
+    expect(Number.isFinite(ep.endX)).toBe(true);
+    expect(Number.isFinite(ep.endY)).toBe(true);
+    // start y end deben ser diferentes (salida derecha, entrada izquierda)
+    expect(ep.startX).not.toBe(ep.endX);
+  });
+
   it('calcula endpoints en el borde del rectángulo', () => {
     const from = { x: 0, y: 0 };
     const to = { x: 200, y: 0 };
@@ -342,7 +358,31 @@ describe('entityEdgeEndpoints', () => {
   });
 });
 
-describe('entityEdgeLaneOffsets', () => {
+describe('entityEdgeCurve', () => {
+  it('self-edge produce path de loop SVG', () => {
+    const ep = {
+      startX: 180,
+      startY: 100,
+      endX: 20,
+      endY: 100,
+      isSelfLoop: true,
+      loopCenterX: 100,
+      loopCenterY: 40,
+      loopRadius: 60,
+    };
+    const path = entityEdgeCurve(ep, 0);
+    expect(path).toContain('M 180 100');
+    expect(path).toContain('A'); // arco SVG
+    expect(path).toContain('20 100'); // end point
+  });
+
+  it('edge normal produce curva Bezier', () => {
+    const ep = { startX: 10, startY: 20, endX: 100, endY: 20 };
+    const path = entityEdgeCurve(ep, 0);
+    expect(path).toContain('M 10 20');
+    expect(path).toContain('C');
+  });
+});
   it('separación estable para fan-out/in', () => {
     const relations = [
       { id: 'r1', from: 'e1', to: 'e2', kind: 'k', directed: true, evidenceClass: 'observed' as const, provenanceRef: '', label: '' },
@@ -380,8 +420,6 @@ describe('entityEdgeLaneOffsets', () => {
     const lanes2 = entityEdgeLaneOffsets(relations2);
     expect(lanes1).toEqual(lanes2);
   });
-});
-
 describe('filterEntities', () => {
   const entities = [
     { id: 'e1', kind: 'ip' as const, label: '', value: '', attributes: {} },

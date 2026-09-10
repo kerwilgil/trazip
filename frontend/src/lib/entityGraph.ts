@@ -452,6 +452,11 @@ export interface EntityEdgeEndpoints {
   startY: number;
   endX: number;
   endY: number;
+  // Self-loop properties (only present when from === to)
+  isSelfLoop?: boolean;
+  loopCenterX?: number;
+  loopCenterY?: number;
+  loopRadius?: number;
 }
 
 export function entityEdgeEndpoints(
@@ -468,7 +473,23 @@ export function entityEdgeEndpoints(
   const ty = to.y + halfH;
   const dx = tx - fx;
   const dy = ty - fy;
-  if (dx === 0 && dy === 0) return { startX: fx, startY: fy, endX: tx, endY: ty };
+
+  // Self-edge (from === to): create a loop that exits and re-enters the node
+  if (dx === 0 && dy === 0) {
+    const loopRadius = Math.max(halfW, halfH) + 12;
+    // Exit from right side, loop around top, re-enter from left side
+    return {
+      startX: fx + halfW,
+      startY: fy,
+      endX: fx - halfW,
+      endY: fy,
+      isSelfLoop: true,
+      loopCenterX: fx,
+      loopCenterY: fy - loopRadius,
+      loopRadius,
+    };
+  }
+
   const scale = 1 / Math.max(Math.abs(dx) / halfW, Math.abs(dy) / halfH);
   return {
     startX: fx + dx * scale,
@@ -482,6 +503,18 @@ export function entityEdgeCurve(
   endpoints: EntityEdgeEndpoints,
   laneOffset: number,
 ): string {
+  // Self-loop: create a circular/elliptical loop path
+  if (endpoints.isSelfLoop && endpoints.loopCenterX !== undefined && endpoints.loopCenterY !== undefined && endpoints.loopRadius !== undefined) {
+    const cx = endpoints.loopCenterX;
+    const cy = endpoints.loopCenterY;
+    const r = endpoints.loopRadius;
+    // Create an elliptical loop: start at right, arc up and around to left
+    const rx = endpoints.loopRadius * 0.7;
+    const ry = endpoints.loopRadius;
+    // Start at right-middle, arc up and around to left-middle
+    return `M ${endpoints.startX} ${endpoints.startY} A ${rx} ${ry} 0 1 0 ${endpoints.endX} ${endpoints.endY}`;
+  }
+
   const dx = endpoints.endX - endpoints.startX;
   const bend = Math.max(-24, Math.min(24, laneOffset));
   const cx1 = endpoints.startX + dx * 0.34;

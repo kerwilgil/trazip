@@ -1350,6 +1350,18 @@ const EN: Record<string, string> = {
   'Ajustar': 'Fit',
   'Detalles de selección': 'Selection details',
   'No hay entidades OSINT para visualizar todavía.': 'No OSINT entities to visualize yet.',
+  'Cuando existan resultados OSINT con relaciones explícitas, aparecerán aquí. No se muestran datos de ejemplo.':
+    'When OSINT results with explicit relationships exist, they will appear here. No example data is shown.',
+  'Atributos': 'Attributes',
+  'Relaciones asociadas': 'Associated relations',
+  'Tipo de relación': 'Relation type',
+  'Desde': 'From',
+  'Hasta': 'To',
+  'Dirigida': 'Directed',
+  'Provenance': 'Provenance',
+  'Etiqueta': 'Label',
+  'Todos los tipos': 'All types',
+  'Todas las clases': 'All classes',
 };
 
 function initialLocale(): Locale {

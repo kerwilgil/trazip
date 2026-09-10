@@ -167,6 +167,14 @@ export default function OsintIntelligence() {
     setSelection(EMPTY_SELECTION);
   };
 
+  // Keyboard activation handler for accessible selection
+  const handleKeyDown = (e: React.KeyboardEvent, onActivate: () => void) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      onActivate();
+    }
+  };
+
   // Selection detail renderers
   const renderEntityDetails = () => {
     if (!selection.entityId) return null;
@@ -225,10 +233,10 @@ export default function OsintIntelligence() {
           <strong>{t('Relación')}: {rel.id}</strong>
           <span className={`tag ${desc.tagClass}`}>{t(desc.labelKey)}</span>
         </div>
-        <div className="kv" style={{ marginBottom: 4 }}>
-          <span className="k">{t('Tipo')}</span>
-          <span className="v mono">{rel.kind}</span>
-        </div>
+<div className="kv" style={{ marginBottom: 4 }}>
+                      <span className="k">{t('Tipo de relación')}</span>
+                      <span className="v mono">{rel.kind}</span>
+                    </div>
         <div className="kv" style={{ marginBottom: 4 }}>
           <span className="k">{t('Desde')}</span>
           <span className="v">{rel.from}{fromEntity ? ` (${fromEntity.value})` : ''}</span>
@@ -571,6 +579,10 @@ export default function OsintIntelligence() {
                           e.stopPropagation();
                           setSelection({ ...selection, relationId: rel.id, entityId: null });
                         }}
+                        onKeyDown={(e) => handleKeyDown(e, () => {
+                          e.stopPropagation();
+                          setSelection({ ...selection, relationId: rel.id, entityId: null });
+                        })}
                         tabIndex={0}
                         role="button"
                         aria-label={`${t('Relación')}: ${t(rel.kind)} — ${t('Desde')}: ${rel.from} — ${t('Hasta')}: ${rel.to} — ${t('Evidencia')}: ${t(desc.labelKey)}`}
@@ -594,6 +606,10 @@ export default function OsintIntelligence() {
                           e.stopPropagation();
                           setSelection({ ...selection, entityId: entity.id, relationId: null });
                         }}
+                        onKeyDown={(e) => handleKeyDown(e, () => {
+                          e.stopPropagation();
+                          setSelection({ ...selection, entityId: entity.id, relationId: null });
+                        })}
                         tabIndex={0}
                         role="button"
                         aria-label={`${t('Entidad')}: ${t(kindDesc.labelKey)} — ${t('Valor')}: ${entity.value} — ${t('ID')}: ${entity.id}`}
