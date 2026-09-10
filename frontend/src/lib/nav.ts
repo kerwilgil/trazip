@@ -22,6 +22,7 @@ export type ViewId =
   | 'ipcalc'
   | 'webintel'
   | 'bgp'
+  | 'osint'
   | 'phone'
   | 'voip'
   | 'monitor'
@@ -79,6 +80,7 @@ export const NAV: NavGroup[] = [
     items: [
       { id: 'webintel', label: 'Inteligencia web', phase: 4, ready: true },
       { id: 'bgp', label: 'Inteligencia BGP', phase: 8, ready: true },
+      { id: 'osint', label: 'Inteligencia OSINT', phase: 9, ready: true },
       { id: 'phone', label: 'Teléfono', phase: 4, ready: true },
       { id: 'voip', label: 'Llamadas VoIP', phase: 3, ready: true },
     ],

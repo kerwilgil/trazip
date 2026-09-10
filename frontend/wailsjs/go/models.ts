@@ -384,6 +384,30 @@ export namespace api {
 		    return a;
 		}
 	}
+	export class OSINTProviderInfo {
+	    id: string;
+	    name: string;
+	    capabilities: string[];
+	    activityClass: string;
+	    disclosureClass: string;
+	    requiresScope: boolean;
+	    rateLimit?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new OSINTProviderInfo(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.capabilities = source["capabilities"];
+	        this.activityClass = source["activityClass"];
+	        this.disclosureClass = source["disclosureClass"];
+	        this.requiresScope = source["requiresScope"];
+	        this.rateLimit = source["rateLimit"];
+	    }
+	}
 	export class TalkerRow {
 	    key: string;
 	    label: string;
@@ -392,7 +416,7 @@ export namespace api {
 	    country?: string;
 	    asn?: number;
 	    org?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new TalkerRow(source);
 	    }

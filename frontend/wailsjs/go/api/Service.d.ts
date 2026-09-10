@@ -157,6 +157,8 @@ export function LanDiscover():Promise<lan.Report>;
 
 export function LanTrustAssess(arg1:Array<lan.HostResult>):Promise<lan.TrustResult>;
 
+export function ListOSINTProviders():Promise<Array<api.OSINTProviderInfo>>;
+
 export function ListSessions():Promise<Array<api.SessionInfo>>;
 
 export function MACLookup(arg1:string):Promise<oui.Detail>;

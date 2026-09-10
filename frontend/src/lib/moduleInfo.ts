@@ -21,6 +21,7 @@ export const MODULE_INFO: Record<ViewId, string> = {
   ipcalc: 'Calcula redes, hosts, máscaras, prefijos y rangos IPv4/IPv6 sin realizar consultas externas.',
   webintel: 'Analiza un dominio o URL: DNS, TLS/certificados, cabeceras HTTP, RDAP, reputación — con historial de consultas de la sesión.',
   bgp: 'Analiza routing BGP mediante RIPEstat/RIS: prefijos, vecinos observados, topología, RPKI, histórico, BGPlay, tiempo real y observatorio.',
+  osint: 'Fundación de inteligencia OSINT: lista los proveedores registrados y su metadata real (capacidades, actividad pasiva/activa, divulgación, si requieren alcance). Sin proveedores externos reales ni ejecución todavía; la seguridad la aplican el Executor y el ScopeGuard del backend.',
   phone: 'Identifica un número de teléfono sin salir a internet: validez, país, operador y si la línea es móvil, fija o VoIP. Devuelve además el E.164 canónico y el URI tel: que viaja en las cabeceras SIP.',
   voip: 'Reconstruye llamadas SIP/RTP de una captura: diagrama de señalización estilo sngrep, calidad de audio estimada (MOS), exportación de audio e histórico de calidad por línea a través del tiempo.',
   monitor: 'Ping/MTR continuo en segundo plano por objetivo, con detección de degradación respecto a una línea base móvil, perfil base fijo opcional y comparación entre ventanas de tiempo.',

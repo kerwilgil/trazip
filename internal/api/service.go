@@ -34,6 +34,7 @@ import (
 	"trazip/internal/lan"
 	"trazip/internal/model"
 	"trazip/internal/monitor"
+	"trazip/internal/osint"
 	"trazip/internal/packet"
 	"trazip/internal/paths"
 	"trazip/internal/pcap"
@@ -99,6 +100,13 @@ type Service struct {
 	oui            *oui.Engine
 	updateMgr      *update.Manager
 	investigations *investigation.Manager
+
+	// osintRegistry is the OSINT Intelligence foundation's provider registry
+	// (V1.5-2). V1.5-3 wires only its read-only metadata to the UI via
+	// ListOSINTProviders — no provider is registered yet, and the registry
+	// never hands out a runnable provider. Execution (Executor + ScopeGuard)
+	// is a later phase.
+	osintRegistry *osint.Registry
 
 	// bgpRealtimeStart constructs (but never starts — see
 	// bgp.PrepareRealtimeSession's own doc comment) a v1.2 BGP realtime
@@ -194,6 +202,7 @@ func NewServiceWithSessions(sessions *session.Manager, monitorMgr *monitor.Manag
 		bgpRealtimeStart:  bgp.PrepareRealtimeSession,
 		bgpSessions:       make(map[string]*bgp.RealtimeSession),
 		bgpFinalSnapshots: make(map[string]bgp.RealtimeSessionInfo),
+		osintRegistry:     osint.NewRegistry(),
 	}
 	s.geoUpdater = geoupdate.New(dataDir, geo)
 	s.updateMgr = update.NewManager(Version, paths.Sub("updates"), paths.Sub("update-settings.json"))
@@ -467,6 +476,37 @@ func (s *Service) HTTPInspect(rawURL, method string, maxRedirects int) httpintel
 // signals, extracted hostnames/IPs and the correlation graph.
 func (s *Service) WebIntelAnalyze(rawInput, resolverAddr string) webintel.Result {
 	return webintel.Analyze(context.Background(), s.geo, rawInput, resolverAddr)
+}
+
+// ListOSINTProviders returns read-only metadata for every provider registered
+// in the OSINT Registry, sorted by ID for a deterministic UI. It never returns
+// a runnable provider — the registry hands out ProviderMeta copies only, and
+// the only route to execution is the Executor + ScopeGuard (not exposed here).
+// V1.5-3 registers no real providers, so this returns an empty slice; the
+// empty result is a valid "no sources registered yet" state, not an error.
+// Always a non-nil slice so the frontend contract (an array, never null) holds.
+func (s *Service) ListOSINTProviders() []OSINTProviderInfo {
+	out := []OSINTProviderInfo{}
+	if s.osintRegistry == nil {
+		return out
+	}
+	for _, m := range s.osintRegistry.AllMetas() {
+		caps := make([]string, 0, len(m.Capabilities))
+		for _, c := range m.Capabilities {
+			caps = append(caps, string(c))
+		}
+		out = append(out, OSINTProviderInfo{
+			ID:              m.ID,
+			Name:            m.Name,
+			Capabilities:    caps,
+			ActivityClass:   m.ActivityClass.String(),
+			DisclosureClass: m.DisclosureClass.String(),
+			RequiresScope:   m.RequiresScope,
+			RateLimit:       m.RateLimit,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
 }
 
 // PassiveOSINT keeps all enrichment offline unless external is explicitly
