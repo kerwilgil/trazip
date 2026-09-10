@@ -117,6 +117,22 @@ type PassiveOSINTResult struct {
 	DataSent  string       `json:"dataSent,omitempty"`
 }
 
+// OSINTProviderInfo is the read-only, serialization-safe view of one entry in
+// the OSINT Registry (internal/osint). It is metadata only: there is no field
+// that exposes a runnable provider, and V1.5-3 ships no real providers, so
+// Service.ListOSINTProviders returns an empty slice until a provider is
+// registered. ActivityClass / DisclosureClass are the string forms
+// ("passive"/"active", "local"/"passive"/"active") of the domain enums.
+type OSINTProviderInfo struct {
+	ID              string   `json:"id"`
+	Name            string   `json:"name"`
+	Capabilities    []string `json:"capabilities"`
+	ActivityClass   string   `json:"activityClass"`
+	DisclosureClass string   `json:"disclosureClass"`
+	RequiresScope   bool     `json:"requiresScope"`
+	RateLimit       string   `json:"rateLimit,omitempty"`
+}
+
 // SessionInfo is a serializable view of a work session.
 type SessionInfo struct {
 	ID         string `json:"id"`

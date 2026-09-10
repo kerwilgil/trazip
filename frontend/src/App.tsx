@@ -20,6 +20,7 @@ import LiveCapture from './views/LiveCapture';
 import VoipCalls from './views/VoipCalls';
 import WebIntelligence from './views/WebIntelligence';
 import BgpIntelligence from './views/BgpIntelligence';
+import OsintIntelligence from './views/OsintIntelligence';
 import Monitor from './views/Monitor';
 import Lab from './views/Lab';
 import SelfTest from './views/SelfTest';
@@ -55,6 +56,7 @@ function viewComponent(view: ViewId, caps: api.Capabilities | null, active: bool
     case 'voip': return <VoipCalls />;
     case 'webintel': return <WebIntelligence />;
     case 'bgp': return <BgpIntelligence />;
+    case 'osint': return <OsintIntelligence />;
     case 'monitor': return <Monitor />;
     case 'lab': return <Lab />;
     case 'selftest': return <SelfTest />;

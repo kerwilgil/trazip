@@ -258,6 +258,10 @@ export function LanTrustAssess(arg1) {
   return window['go']['api']['Service']['LanTrustAssess'](arg1);
 }
 
+export function ListOSINTProviders() {
+  return window['go']['api']['Service']['ListOSINTProviders']();
+}
+
 export function ListSessions() {
   return window['go']['api']['Service']['ListSessions']();
 }

@@ -106,6 +106,7 @@ import {
   InvestigationAddMonitorEvent as goInvestigationAddMonitorEvent,
   InvestigationAddVoIPCall as goInvestigationAddVoIPCall,
   SelfTestLocal as goSelfTestLocal,
+  ListOSINTProviders as goListOSINTProviders,
 } from '../../wailsjs/go/api/Service';
 import {
   PickPcapFile as goPickPcapFile,
@@ -1448,6 +1449,26 @@ export interface PassiveOSINTResult {
 
 export async function passiveOSINT(input: string, external: boolean): Promise<PassiveOSINTResult> {
   return goPassiveOSINT(input, external) as unknown as Promise<PassiveOSINTResult>;
+}
+
+// ---- OSINT Intelligence — read-only provider metadata (V1.5-2 foundation,
+// V1.5-3 UI). Hand-declared like PassiveOSINTResult above. This is the ONLY
+// OSINT backend call in V1.5-3: metadata only, no execution. An empty array
+// is a valid "no sources registered yet" state, and is what the browser
+// preview (no Wails runtime) returns.
+export interface OsintProviderInfo {
+  id: string;
+  name: string;
+  capabilities: string[];
+  activityClass: string; // "passive" | "active"
+  disclosureClass: string; // "local" | "passive" | "active"
+  requiresScope: boolean;
+  rateLimit?: string;
+}
+
+export async function listOsintProviders(): Promise<OsintProviderInfo[]> {
+  if (!hasRuntime()) return [];
+  return goListOSINTProviders() as unknown as Promise<OsintProviderInfo[]>;
 }
 
 export async function rdapLookupIP(ip: string): Promise<rdap.Result> {
