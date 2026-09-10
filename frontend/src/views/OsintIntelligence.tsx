@@ -13,8 +13,34 @@ import {
   type MetadataState,
   type OsintProvider,
 } from '../lib/osint';
+import {
+  ENTITY_GRAPH_MAX_ZOOM,
+  ENTITY_GRAPH_MIN_ZOOM,
+  ENTITY_GRAPH_ZOOM_STEP,
+  buildEntityGraphLayout,
+  clampEntityGraphZoom,
+  entityEdgeCurve,
+  entityEdgeEndpoints,
+  entityEdgeLaneOffsets,
+  entityGraphViewBox,
+  filterEntities,
+  filterRelations,
+  type EntityGraphFilters,
+  type EntityGraphSelection,
+  type EntityGraphViewBox,
+  type EntityLayoutNode,
+  type EntityGraphLayout,
+  type OsintEntity,
+  type OsintRelation,
+  EVIDENCE_DESCRIPTORS,
+  ENTITY_KIND_DESCRIPTORS,
+  EVIDENCE_CLASS_ORDER,
+  ENTITY_KIND_ORDER,
+  EMPTY_SELECTION,
+  DEFAULT_FILTERS,
+} from '../lib/entityGraph';
 
-// OSINT Intelligence workspace (V1.5-3).
+// OSINT Intelligence workspace (V1.5-4).
 //
 // This surface exposes the V1.5-2 OSINT foundation: it lists the providers in
 // the backend Registry with their real metadata, and lays out — but does not
@@ -22,6 +48,7 @@ import {
 // providers and no execution API yet; the empty Registry is the expected
 // state. Passive/active separation, capability gating and scope authorization
 // are enforced by the Go Executor + ScopeGuard, never by this view.
+// Entity Graph (V1.5-4) visualizes explicit entity relationships — no inference.
 export default function OsintIntelligence() {
   const { t } = useI18n();
   const [state, setState] = useState<MetadataState>('idle');
@@ -29,6 +56,17 @@ export default function OsintIntelligence() {
   const [target, setTarget] = useState('');
   const [providerId, setProviderId] = useState('');
   const [capability, setCapability] = useState('');
+
+  // Entity Graph state (V1.5-4) — empty in this version, no runtime data
+  const [graphZoom, setGraphZoom] = useState(1);
+  const [graphViewBox, setGraphViewBox] = useState<EntityGraphViewBox>({
+    x: 0,
+    y: 0,
+    width: 800,
+    height: 600,
+  });
+  const [selection, setSelection] = useState<EntityGraphSelection>(EMPTY_SELECTION);
+  const [filters, setFilters] = useState<EntityGraphFilters>(DEFAULT_FILTERS);
 
   useEffect(() => {
     let alive = true;
@@ -58,6 +96,44 @@ export default function OsintIntelligence() {
   useEffect(() => {
     if (capability && !capabilityOptions.includes(capability)) setCapability('');
   }, [capability, capabilityOptions]);
+
+  // Empty entity graph in V1.5-4 — no runtime data yet
+  const emptyEntities: OsintEntity[] = [];
+  const emptyRelations: OsintRelation[] = [];
+
+  const layout = useMemo(
+    () => buildEntityGraphLayout(emptyEntities, emptyRelations),
+    [],
+  );
+
+  const handleZoomIn = () => {
+    const next = clampEntityGraphZoom(graphZoom + ENTITY_GRAPH_ZOOM_STEP);
+    setGraphZoom(next);
+    setGraphViewBox(entityGraphViewBox(layout.width, layout.height, next));
+  };
+
+  const handleZoomOut = () => {
+    const next = clampEntityGraphZoom(graphZoom - ENTITY_GRAPH_ZOOM_STEP);
+    setGraphZoom(next);
+    setGraphViewBox(entityGraphViewBox(layout.width, layout.height, next));
+  };
+
+  const handleResetView = () => {
+    setGraphZoom(1);
+    setGraphViewBox(entityGraphViewBox(layout.width, layout.height, 1));
+  };
+
+  const handleWheel = (e: React.WheelEvent) => {
+    if (!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    const next = clampEntityGraphZoom(graphZoom - e.deltaY * 0.001);
+    setGraphZoom(next);
+    setGraphViewBox(entityGraphViewBox(layout.width, layout.height, next));
+  };
+
+  const handleCanvasClick = () => {
+    setSelection(EMPTY_SELECTION);
+  };
 
   return (
     <div className="content-inner">
@@ -229,6 +305,307 @@ export default function OsintIntelligence() {
               </span>
             </div>
           ))}
+        </div>
+      </section>
+
+      {/* ---- Entity Graph (V1.5-4) ---- */}
+      <section className="card" aria-labelledby="osint-graph-h" style={{ marginTop: 16 }}>
+        <h3 id="osint-graph-h">{t('Grafo de entidades')}</h3>
+        <p className="dim" style={{ marginTop: 4 }}>
+          {t(
+            'Visualización de relaciones entre entidades OSINT. Cada edge declara explícitamente su clase de evidencia (Observado / Contexto posible / No demostrado). No hay inferencia automática. El grafo vacío es el estado esperado en esta versión.',
+          )}
+        </p>
+
+        <div style={{ marginTop: 12 }}>
+          <div className="field-grid cols-3" style={{ marginBottom: 8 }}>
+            <label>
+              {t('Entidad')}
+              <select
+                value={filters.entityKinds.join(',')}
+                onChange={(e) => {
+                  const kinds = e.target.value ? e.target.value.split(',') : [];
+                  setFilters({ ...filters, entityKinds: kinds as any });
+                }}
+                style={{ maxWidth: 240 }}
+              >
+                <option value="">{t('Todos los tipos')}</option>
+                {ENTITY_KIND_ORDER.filter((k) => k !== 'unknown').map((k) => (
+                  <option key={k} value={k}>
+                    {t(ENTITY_KIND_DESCRIPTORS[k].labelKey)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              {t('Evidencia')}
+              <select
+                value={filters.evidenceClasses.join(',')}
+                onChange={(e) => {
+                  const classes = e.target.value ? e.target.value.split(',') : [];
+                  setFilters({ ...filters, evidenceClasses: classes as any });
+                }}
+                style={{ maxWidth: 240 }}
+              >
+                <option value="">{t('Todas las clases')}</option>
+                {EVIDENCE_CLASS_ORDER.filter((c) => c !== 'unknown').map((c) => (
+                  <option key={c} value={c}>
+                    {t(EVIDENCE_DESCRIPTORS[c].labelKey)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label style={{ alignSelf: 'end' }}>
+              <button className="btn" type="button" onClick={() => setFilters(DEFAULT_FILTERS)}>
+                {t('Restablecer filtros')}
+              </button>
+            </label>
+          </div>
+
+          <div
+            className="graph-canvas"
+            style={{
+              position: 'relative',
+              width: '100%',
+              height: 420,
+              border: '1px solid var(--border)',
+              borderRadius: 4,
+              background: 'var(--surface-2)',
+              overflow: 'hidden',
+            }}
+            onWheel={handleWheel}
+            onClick={handleCanvasClick}
+            role="img"
+            aria-label={emptyEntities.length === 0 ? t('No hay entidades OSINT para visualizar todavía.') : t('Grafo de entidades OSINT')}
+          >
+            {emptyEntities.length === 0 ? (
+              <div
+                className="empty"
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  height: '100%',
+                  padding: 24,
+                }}
+              >
+                <div className="big" aria-hidden="true" style={{ fontSize: 48, marginBottom: 12 }}>
+                  ∅
+                </div>
+                <p style={{ textAlign: 'center', maxWidth: 320 }}>
+                  {t('No hay entidades OSINT para visualizar todavía.')}
+                </p>
+                <p className="dim" style={{ textAlign: 'center', maxWidth: 320, marginTop: 8 }}>
+                  {t('Cuando existan resultados OSINT con relaciones explícitas, aparecerán aquí. No se muestran datos de ejemplo.')}
+                </p>
+              </div>
+            ) : (
+              <svg
+                viewBox={`${graphViewBox.x} ${graphViewBox.y} ${graphViewBox.width} ${graphViewBox.height}`}
+                preserveAspectRatio="xMidYMid meet"
+                style={{ width: '100%', height: '100%' }}
+              >
+                <defs>
+                  <marker
+                    id="arrowhead"
+                    markerWidth={10}
+                    markerHeight={7}
+                    refX={9}
+                    refY={3.5}
+                    orient="auto"
+                    markerUnits="strokeWidth"
+                  >
+                    <path d="M0,0 L0,7 L10,3.5 Z" fill="var(--text-dim)" />
+                  </marker>
+                </defs>
+                {/* Edges */}
+                <g className="graph-edges">
+                  {emptyRelations.map((rel) => {
+                    const fromNode = layout.nodes.find((n) => n.id === rel.from);
+                    const toNode = layout.nodes.find((n) => n.id === rel.to);
+                    if (!fromNode || !toNode) return null;
+                    const endpoints = entityEdgeEndpoints(fromNode, toNode, layout.nodeWidth, layout.nodeHeight);
+                    const lanes = entityEdgeLaneOffsets([rel]);
+                    const laneOffset = lanes.get(`${rel.from}-${rel.to}-${rel.kind}`) ?? 0;
+                    const desc = EVIDENCE_DESCRIPTORS[rel.evidenceClass];
+                    const curve = entityEdgeCurve(endpoints, laneOffset);
+                    const isSelected = selection.relationId === rel.id;
+                    return (
+                      <path
+                        key={rel.id}
+                        d={curve}
+                        stroke={isSelected ? 'var(--accent)' : 'var(--text-dim)'}
+                        strokeWidth={isSelected ? 2.5 : 1.5}
+                        fill="none"
+                        style={{
+                          strokeDasharray: desc.edgeStyle === 'dashed' ? '6,4' : desc.edgeStyle === 'dotted' ? '2,4' : 'none',
+                        }}
+                        markerEnd={rel.directed ? 'url(#arrowhead)' : undefined}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelection({ ...selection, relationId: rel.id, entityId: null });
+                        }}
+                        tabIndex={0}
+                        role="button"
+                        aria-label={`${t('Relación')}: ${t(rel.kind)} — ${t('Desde')}: ${rel.from} — ${t('Hasta')}: ${rel.to} — ${t('Evidencia')}: ${t(desc.labelKey)}`}
+                        aria-pressed={isSelected}
+                      />
+                    );
+                  })}
+                </g>
+                {/* Nodes */}
+                <g className="graph-nodes">
+                  {emptyEntities.map((entity) => {
+                    const node = layout.nodes.find((n) => n.id === entity.id);
+                    if (!node) return null;
+                    const kindDesc = ENTITY_KIND_DESCRIPTORS[entity.kind];
+                    const isSelected = selection.entityId === entity.id;
+                    return (
+                      <g
+                        key={entity.id}
+                        transform={`translate(${node.x}, ${node.y})`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelection({ ...selection, entityId: entity.id, relationId: null });
+                        }}
+                        tabIndex={0}
+                        role="button"
+                        aria-label={`${t('Entidad')}: ${t(kindDesc.labelKey)} — ${t('Valor')}: ${entity.value} — ${t('ID')}: ${entity.id}`}
+                        aria-pressed={isSelected}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        <rect
+                          x={0}
+                          y={0}
+                          width={layout.nodeWidth}
+                          height={layout.nodeHeight}
+                          rx={6}
+                          ry={6}
+                          fill={isSelected ? 'var(--accent-bg)' : 'var(--surface-3)'}
+                          stroke={isSelected ? 'var(--accent)' : 'var(--border)'}
+                          strokeWidth={isSelected ? 2 : 1}
+                        />
+                        <text
+                          x={layout.nodeWidth / 2}
+                          y={18}
+                          textAnchor="middle"
+                          dominantBaseline="middle"
+                          fill="var(--text-faint)"
+                          fontSize={10}
+                          fontWeight={600}
+                          style={{ textTransform: 'uppercase', letterSpacing: '0.5px' }}
+                        >
+                          {t(kindDesc.labelKey)}
+                        </text>
+                        <text
+                          x={layout.nodeWidth / 2}
+                          y={38}
+                          textAnchor="middle"
+                          dominantBaseline="middle"
+                          fill="var(--text)"
+                          fontSize={12}
+                          fontFamily="monospace"
+                        >
+                          {entity.value.length > 24 ? entity.value.slice(0, 21) + '…' : entity.value}
+                        </text>
+                        <text
+                          x={layout.nodeWidth / 2}
+                          y={52}
+                          textAnchor="middle"
+                          dominantBaseline="middle"
+                          fill="var(--text-dim)"
+                          fontSize={9}
+                        >
+                          {entity.id}
+                        </text>
+                      </g>
+                    );
+                  })}
+                </g>
+              </svg>
+            )}
+
+            {/* Zoom controls */}
+            <div
+              style={{
+                position: 'absolute',
+                bottom: 12,
+                right: 12,
+                display: 'flex',
+                gap: 4,
+                background: 'var(--surface-3)',
+                border: '1px solid var(--border)',
+                borderRadius: 4,
+                padding: 4,
+              }}
+            >
+              <button
+                className="btn"
+                type="button"
+                onClick={handleZoomOut}
+                disabled={graphZoom <= ENTITY_GRAPH_MIN_ZOOM}
+                aria-label={t('Alejar')}
+                style={{ padding: '4px 8px', fontSize: 14, lineHeight: 1 }}
+              >
+                −
+              </button>
+              <span
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  padding: '0 8px',
+                  fontSize: 12,
+                  fontFamily: 'monospace',
+                  color: 'var(--text)',
+                }}
+              >
+                {Math.round(graphZoom * 100)}%
+              </span>
+              <button
+                className="btn"
+                type="button"
+                onClick={handleZoomIn}
+                disabled={graphZoom >= ENTITY_GRAPH_MAX_ZOOM}
+                aria-label={t('Acercar')}
+                style={{ padding: '4px 8px', fontSize: 14, lineHeight: 1 }}
+              >
+                +
+              </button>
+              <button
+                className="btn"
+                type="button"
+                onClick={handleResetView}
+                aria-label={t('Ajustar')}
+                style={{ padding: '4px 8px', fontSize: 12, lineHeight: 1 }}
+              >
+                ⌂
+              </button>
+            </div>
+          </div>
+
+          {/* Selection details */}
+          {(selection.entityId || selection.relationId) && (
+            <div className="card" style={{ marginTop: 12, background: 'var(--surface-2)' }}>
+              <h4 style={{ marginBottom: 8 }}>{t('Detalles de selección')}</h4>
+              {selection.entityId && (
+                <div>
+                  <strong>{t('Entidad')}: {selection.entityId}</strong>
+                  <p className="dim" style={{ marginTop: 4 }}>
+                    {t('Selecciona una entidad en el grafo para ver sus atributos y relaciones.')}
+                  </p>
+                </div>
+              )}
+              {selection.relationId && (
+                <div>
+                  <strong>{t('Relación')}: {selection.relationId}</strong>
+                  <p className="dim" style={{ marginTop: 4 }}>
+                    {t('Selecciona una relación en el grafo para ver su evidencia y provenance.')}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </section>
     </div>

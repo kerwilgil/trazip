@@ -1333,6 +1333,23 @@ const EN: Record<string, string> = {
   'Un proveedor pasivo entró en un flujo activo, o al revés.': 'A passive provider entered an active pipeline, or vice versa.',
   'Procedencia inválida': 'Invalid provenance',
   'El resultado no trae una procedencia coherente; se descarta el dato.': 'The result carries no coherent provenance; the data is discarded.',
+
+  // OSINT Entity Graph (V1.5-4).
+  'Grafo de entidades': 'Entity Graph',
+  'Visualización de relaciones entre entidades OSINT. Cada edge declara explícitamente su clase de evidencia (Observado / Contexto posible / No demostrado). No hay inferencia automática. El grafo vacío es el estado esperado en esta versión.':
+    'Visualization of relationships between OSINT entities. Each edge explicitly declares its evidence class (Observed / Possible context / Not proven). No automatic inference. Empty graph is the expected state in this version.',
+  'Entidad': 'Entity',
+  'Relación': 'Relation',
+  'Observado': 'Observed',
+  'Contexto posible': 'Possible context',
+  'No demostrado': 'Not proven',
+  'Sin entidades': 'No entities',
+  'Restablecer vista': 'Reset view',
+  'Acercar': 'Zoom in',
+  'Alejar': 'Zoom out',
+  'Ajustar': 'Fit',
+  'Detalles de selección': 'Selection details',
+  'No hay entidades OSINT para visualizar todavía.': 'No OSINT entities to visualize yet.',
 };
 
 function initialLocale(): Locale {
