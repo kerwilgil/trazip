@@ -145,6 +145,23 @@ describe('prepared descriptors are complete', () => {
     }
   });
 
+  it('passive activity descriptor does NOT claim the operation is necessarily external', () => {
+    const passiveDesc = ACTIVITY_DESCRIPTORS.passive.summaryKey;
+    expect(passiveDesc).not.toMatch(/consulta.*extern|external.*lookup/i);
+    expect(passiveDesc).toMatch(/interacci[oó]n.*activ|active.*interaction/i);
+  });
+
+  it('valid combination: activityClass=passive + disclosureClass=local + requiresScope=false', () => {
+    const p = normalizeProvider(raw({
+      activityClass: 'passive',
+      disclosureClass: 'local',
+      requiresScope: false,
+    }));
+    expect(p.activityClass).toBe('passive');
+    expect(p.disclosureClass).toBe('local');
+    expect(requiresAuthorizedScope(p)).toBe(false);
+  });
+
   it('enumerates the nine result states the area is prepared for', () => {
     expect([...RESULT_STATES]).toEqual([
       'idle',

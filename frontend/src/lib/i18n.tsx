@@ -1299,7 +1299,7 @@ const EN: Record<string, string> = {
   'Pasivo': 'Passive',
   'Activo': 'Active',
   'Sin clasificar': 'Unclassified',
-  'Solo consultas externas; no se envían paquetes al objetivo.': 'External lookups only; no packets are sent to the target.',
+  'Sin interacción activa directa con el objetivo.': 'No direct active interaction with the target.',
   'Envía sondas directamente a la infraestructura del objetivo.': 'Sends probes directly to the target infrastructure.',
   'El proveedor no declaró una clase de actividad válida.': 'The provider did not declare a valid activity class.',
   'Nada sale del equipo (cálculo puramente local).': 'Nothing leaves the machine (purely local computation).',

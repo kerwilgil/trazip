@@ -131,8 +131,9 @@ All display logic lives in `frontend/src/lib/osint.ts` (pure, unit-tested in
 - Each `<section>` has an `aria-labelledby` heading; the loading line is
   `role="status" aria-live="polite"`; the metadata error is `role="alert"`;
   activity/disclosure tags carry `aria-label` so the meaning does not depend on
-  color. Layout uses `content-inner` and wrapping grids, so it reflows to a
-  narrow window without horizontal overflow.
+  color. Layout uses `content-inner` and wrapping grids, reusing the existing
+  responsive primitives. Visual QA was executed on desktop; narrow viewport
+  remains pending in V1.5-3.
 
 ---
 

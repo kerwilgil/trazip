@@ -72,11 +72,11 @@ internal/osint/
 ## Activity Class Separation
 
 ### Passive (`ActivityPassive`)
-- **Definition**: Purely external lookups. No packets sent to target infrastructure.
-- **Examples**: RDAP queries, CVE database lookups, Certificate Transparency log searches, ASN mapping, passive subdomain enumeration.
-- **Disclosure**: `DisclosureLocal` or `DisclosurePassive` — never `DisclosureActive`.
-- **Scope Guard**: NOT required.
-- **Runner**: implements `osint.PassiveRunner` (`Lookup`), run via `Executor.ExecutePassive`.
+- **Definition**: No interacción activa directa con la infraestructura del objetivo. La clase de divulgación indica si el procesamiento es puramente local o consulta a un tercero.
+- **Ejemplos**: Consultas RDAP, búsquedas en base de datos CVE, búsquedas en logs de Certificate Transparency, mapeo ASN, enumeración pasiva de subdominios.
+- **Divulgación**: `DisclosureLocal` o `DisclosurePassive` — nunca `DisclosureActive`.
+- **Scope Guard**: NO requerido.
+- **Runner**: implementa `osint.PassiveRunner` (`Lookup`), se ejecuta vía `Executor.ExecutePassive`.
 
 ### Active (`ActivityActive`)
 - **Definition**: Sends packets/probes directly to target infrastructure.

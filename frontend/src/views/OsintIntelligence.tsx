@@ -26,7 +26,6 @@ export default function OsintIntelligence() {
   const { t } = useI18n();
   const [state, setState] = useState<MetadataState>('idle');
   const [providers, setProviders] = useState<OsintProvider[]>([]);
-  const [errText, setErrText] = useState('');
   const [target, setTarget] = useState('');
   const [providerId, setProviderId] = useState('');
   const [capability, setCapability] = useState('');
@@ -42,7 +41,6 @@ export default function OsintIntelligence() {
       })
       .catch((e) => {
         if (!alive) return;
-        setErrText(String(e).replace(/^Error:\s*/, ''));
         setState('error');
       });
     return () => {
@@ -153,7 +151,6 @@ export default function OsintIntelligence() {
         {state === 'error' && (
           <div className="note" role="alert" style={{ marginTop: 8 }}>
             {t('No se pudo cargar la metadata de fuentes OSINT.')}
-            {errText ? ` (${errText})` : ''}
           </div>
         )}
 

@@ -47,7 +47,7 @@ export interface ClassDescriptor {
 export const ACTIVITY_DESCRIPTORS: Record<OsintActivity, ClassDescriptor> = {
   passive: {
     labelKey: 'Pasivo',
-    summaryKey: 'Solo consultas externas; no se envían paquetes al objetivo.',
+    summaryKey: 'Sin interacción activa directa con el objetivo.',
     tagClass: 'info',
   },
   active: {
