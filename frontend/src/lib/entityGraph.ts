@@ -508,9 +508,14 @@ export function entityEdgeCurve(
     const cx = endpoints.loopCenterX;
     const cy = endpoints.loopCenterY;
     const r = endpoints.loopRadius;
+    // Use laneOffset to separate multiple self-loops on the same node
+    // Each laneOffset unit = 12px radius offset, clamped to reasonable range
+    const radiusOffset = Math.max(-r * 0.5, Math.min(r * 0.5, laneOffset * 12));
+    const adjustedR = Math.max(16, r + radiusOffset);
+    const adjustedCy = cy - radiusOffset * 0.5;
     // Create an elliptical loop: start at right, arc up and around to left
-    const rx = endpoints.loopRadius * 0.7;
-    const ry = endpoints.loopRadius;
+    const rx = adjustedR * 0.7;
+    const ry = adjustedR;
     // Start at right-middle, arc up and around to left-middle
     return `M ${endpoints.startX} ${endpoints.startY} A ${rx} ${ry} 0 1 0 ${endpoints.endX} ${endpoints.endY}`;
   }

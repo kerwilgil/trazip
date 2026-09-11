@@ -1336,6 +1336,7 @@ const EN: Record<string, string> = {
 
   // OSINT Entity Graph (V1.5-4).
   'Grafo de entidades': 'Entity Graph',
+  'Grafo de entidades OSINT': 'OSINT Entity Graph',
   'Visualización de relaciones entre entidades OSINT. Cada edge declara explícitamente su clase de evidencia (Observado / Contexto posible / No demostrado). No hay inferencia automática. El grafo vacío es el estado esperado en esta versión.':
     'Visualization of relationships between OSINT entities. Each edge explicitly declares its evidence class (Observed / Possible context / Not proven). No automatic inference. Empty graph is the expected state in this version.',
   'Entidad': 'Entity',

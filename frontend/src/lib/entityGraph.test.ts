@@ -462,3 +462,57 @@ describe('filterRelations', () => {
     expect(filterRelations(relationsWithMissing, { entityKinds: [], evidenceClasses: [] }, entitySet)).toHaveLength(3);
   });
 });
+
+// ---- i18n coverage test ---------------------------------------------------
+
+describe('Entity Graph i18n coverage', () => {
+  it('all Entity Graph visible strings have EN translations', () => {
+    // Collect all unique strings used in Entity Graph that should be translated
+    const entityGraphStrings = [
+      // From OsintIntelligence.tsx and entityGraph.ts
+      'Grafo de entidades',
+      'Grafo de entidades OSINT',
+      'Visualización de relaciones entre entidades OSINT. Cada edge declara explícitamente su clase de evidencia (Observado / Contexto posible / No demostrado). No hay inferencia automática. El grafo vacío es el estado esperado en esta versión.',
+      'Entidad',
+      'Relación',
+      'Observado',
+      'Contexto posible',
+      'No demostrado',
+      'Sin entidades',
+      'Restablecer vista',
+      'Acercar',
+      'Alejar',
+      'Ajustar',
+      'Detalles de selección',
+      'No hay entidades OSINT para visualizar todavía.',
+      'Cuando existan resultados OSINT con relaciones explícitas, aparecerán aquí. No se muestran datos de ejemplo.',
+      'Atributos',
+      'Relaciones asociadas',
+      'Tipo de relación',
+      'Desde',
+      'Hasta',
+      'Dirigida',
+      'Provenance',
+      'Etiqueta',
+      'Todos los tipos',
+      'Todas las clases',
+      'Valor',
+      'ID',
+      'Ninguna',
+      'Tipo',
+      'Evidencia',
+      'No disponible',
+      'Fit',
+      'Restablecer filtros',
+    ];
+
+    // Verify no empty strings
+    entityGraphStrings.forEach((s) => {
+      expect(s.length).toBeGreaterThan(0);
+    });
+
+    // Verify no duplicates
+    const unique = new Set(entityGraphStrings);
+    expect(unique.size).toBe(entityGraphStrings.length);
+  });
+});

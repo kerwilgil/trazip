@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { listOsintProviders } from '../lib/api';
 import { useI18n } from '../lib/i18n';
 import {
@@ -68,6 +68,7 @@ export default function OsintIntelligence() {
   });
   const [selection, setSelection] = useState<EntityGraphSelection>(EMPTY_SELECTION);
   const [filters, setFilters] = useState<EntityGraphFilters>(DEFAULT_FILTERS);
+  const graphContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let alive = true;
@@ -140,9 +141,12 @@ export default function OsintIntelligence() {
   };
 
   const handleFitView = () => {
-    // Use a reasonable container size for fit; in reality this would come from the container ref
-    const containerWidth = 800;
-    const containerHeight = 420;
+    // Use actual container dimensions via ref
+    const container = graphContainerRef.current;
+    if (!container) return;
+    const containerWidth = container.clientWidth;
+    const containerHeight = container.clientHeight;
+    if (containerWidth <= 0 || containerHeight <= 0) return;
     const vb = fitEntityGraphViewBox(layout, containerWidth, containerHeight);
     setGraphZoom(clampEntityGraphZoom(
       Math.min(containerWidth / vb.width, containerHeight / vb.height)
@@ -497,6 +501,7 @@ export default function OsintIntelligence() {
           </div>
 
           <div
+            ref={graphContainerRef}
             className="graph-canvas"
             style={{
               position: 'relative',
