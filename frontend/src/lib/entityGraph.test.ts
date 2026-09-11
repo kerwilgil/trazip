@@ -465,8 +465,11 @@ describe('filterRelations', () => {
 
 // ---- i18n coverage test ---------------------------------------------------
 
+// Import the EN translation dictionary from i18n
+import { EN } from './i18n';
+
 describe('Entity Graph i18n coverage', () => {
-  it('all Entity Graph visible strings have EN translations', () => {
+  it('all Entity Graph visible strings have valid EN translations in the dictionary', () => {
     // Collect all unique strings used in Entity Graph that should be translated
     const entityGraphStrings = [
       // From OsintIntelligence.tsx and entityGraph.ts
@@ -506,12 +509,29 @@ describe('Entity Graph i18n coverage', () => {
       'Restablecer filtros',
     ];
 
-    // Verify no empty strings
-    entityGraphStrings.forEach((s) => {
-      expect(s.length).toBeGreaterThan(0);
+    // Verify each string has a valid EN translation in the EN dictionary
+    entityGraphStrings.forEach((sourceString) => {
+      // Check that the key exists in EN dictionary
+      expect(EN).toHaveProperty(sourceString);
+
+      // Get the translation
+      const translation = EN[sourceString];
+
+      // Translation should not be undefined
+      expect(translation).not.toBeUndefined();
+
+      // Translation should not be empty
+      expect(translation.length).toBeGreaterThan(0);
+
+      // For Spanish source strings that should be translated,
+      // the EN translation should NOT be the same as the source
+      // (unless it's a technical identifier that deliberately stays the same)
+      if (!['Provenance', 'ID', 'Fit'].includes(sourceString)) {
+        expect(translation).not.toBe(sourceString);
+      }
     });
 
-    // Verify no duplicates
+    // Verify no duplicates in our test list
     const unique = new Set(entityGraphStrings);
     expect(unique.size).toBe(entityGraphStrings.length);
   });
