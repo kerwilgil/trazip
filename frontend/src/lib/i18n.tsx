@@ -6,7 +6,7 @@ export type Translate = (source: string, values?: TranslationValues) => string;
 
 const STORAGE_KEY = 'trazip-language';
 
-const EN: Record<string, string> = {
+export const EN: Record<string, string> = {
   'No se pudo obtener información BGP desde RIPEstat.': 'Unable to retrieve BGP information from RIPEstat.',
   'El servicio no respondió dentro del tiempo esperado. Puede ser una demora temporal del servicio externo o de la conexión.':
     'The service did not respond within the expected time. This may be a temporary service or network delay.',
@@ -1333,6 +1333,40 @@ const EN: Record<string, string> = {
   'Un proveedor pasivo entró en un flujo activo, o al revés.': 'A passive provider entered an active pipeline, or vice versa.',
   'Procedencia inválida': 'Invalid provenance',
   'El resultado no trae una procedencia coherente; se descarta el dato.': 'The result carries no coherent provenance; the data is discarded.',
+
+  // OSINT Entity Graph (V1.5-4).
+  'Grafo de entidades': 'Entity Graph',
+  'Grafo de entidades OSINT': 'OSINT Entity Graph',
+  'Visualización de relaciones entre entidades OSINT. Cada edge declara explícitamente su clase de evidencia (Observado / Contexto posible / No demostrado). No hay inferencia automática. El grafo vacío es el estado esperado en esta versión.':
+    'Visualization of relationships between OSINT entities. Each edge explicitly declares its evidence class (Observed / Possible context / Not proven). No automatic inference. Empty graph is the expected state in this version.',
+  'Entidad': 'Entity',
+  'Relación': 'Relation',
+  'Observado': 'Observed',
+  'Contexto posible': 'Possible context',
+  'No demostrado': 'Not proven',
+  'Sin entidades': 'No entities',
+  'Restablecer vista': 'Reset view',
+  'Acercar': 'Zoom in',
+  'Alejar': 'Zoom out',
+  'Ajustar': 'Fit',
+  'Fit': 'Fit',
+  'Detalles de selección': 'Selection details',
+  'No hay entidades OSINT para visualizar todavía.': 'No OSINT entities to visualize yet.',
+  'Cuando existan resultados OSINT con relaciones explícitas, aparecerán aquí. No se muestran datos de ejemplo.':
+    'When OSINT results with explicit relationships exist, they will appear here. No example data is shown.',
+  'Atributos': 'Attributes',
+  'Relaciones asociadas': 'Associated relations',
+  'Tipo de relación': 'Relation type',
+  'Desde': 'From',
+  'Hasta': 'To',
+  'Dirigida': 'Directed',
+  'Provenance': 'Provenance',
+  'Etiqueta': 'Label',
+  'ID': 'ID',
+  'Todos los tipos': 'All types',
+  'Todas las clases': 'All classes',
+  'Restablecer filtros': 'Reset filters',
+  'Ninguna': 'None',
 };
 
 function initialLocale(): Locale {

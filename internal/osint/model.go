@@ -273,6 +273,148 @@ func (m ProviderMeta) Validate() error {
 }
 
 // ============================================================
+// Evidence Class — classification of relationship evidence
+// ============================================================
+
+// EvidenceClass classifies the strength of evidence for a relationship.
+// Only three canonical classes are valid. EvidenceUnknown is an invalid sentinel
+// that MUST be rejected by validation.
+type EvidenceClass int
+
+const (
+	// EvidenceUnknown is an invalid sentinel. It is NOT a valid evidence class.
+	EvidenceUnknown EvidenceClass = iota
+	// EvidenceObserved — the relationship is directly backed by provenance/evidence.
+	EvidenceObserved
+	// EvidencePossibleContext — plausible investigative context, NOT proven.
+	EvidencePossibleContext
+	// EvidenceNotProven — relationship shown only as not proven.
+	EvidenceNotProven
+)
+
+// String returns a stable representation for logging/UI.
+// Returns "unknown" ONLY for the invalid EvidenceUnknown sentinel.
+func (e EvidenceClass) String() string {
+	switch e {
+	case EvidenceObserved:
+		return "observed"
+	case EvidencePossibleContext:
+		return "possible_context"
+	case EvidenceNotProven:
+		return "not_proven"
+	default:
+		return "unknown"
+	}
+}
+
+// IsValid reports whether the evidence class is a canonical valid class.
+// EvidenceUnknown (0) is explicitly INVALID.
+func (e EvidenceClass) IsValid() bool {
+	return e >= EvidenceObserved && e <= EvidenceNotProven
+}
+
+// ============================================================
+// Entity — OSINT entity in the graph
+// ============================================================
+
+// EntityKind is an extensible entity type identifier.
+type EntityKind string
+
+const (
+	EntityKindUnknown      EntityKind = ""
+	EntityKindIP           EntityKind = "ip"
+	EntityKindDomain       EntityKind = "domain"
+	EntityKindASN          EntityKind = "asn"
+	EntityKindCertificate  EntityKind = "certificate"
+	EntityKindCVE          EntityKind = "cve"
+	EntityKindOrganization EntityKind = "organization"
+	EntityKindURL          EntityKind = "url"
+	EntityKindCountry      EntityKind = "country"
+)
+
+// Entity represents a node in the OSINT entity graph.
+type Entity struct {
+	ID         string
+	Kind       EntityKind
+	Label      string
+	Value      string
+	Attributes map[string]string
+}
+
+// Validate checks that the entity is well-formed.
+func (e Entity) Validate() error {
+	if e.ID == "" {
+		return fmt.Errorf("entity: missing ID")
+	}
+	if e.Kind == EntityKindUnknown {
+		return fmt.Errorf("entity: missing kind")
+	}
+	if e.Label == "" {
+		return fmt.Errorf("entity: missing label")
+	}
+	if e.Value == "" {
+		return fmt.Errorf("entity: missing value")
+	}
+	return nil
+}
+
+// clone returns a deep copy of the entity.
+func (e Entity) clone() Entity {
+	cp := e
+	if e.Attributes != nil {
+		cp.Attributes = make(map[string]string, len(e.Attributes))
+		for k, v := range e.Attributes {
+			cp.Attributes[k] = v
+		}
+	}
+	return cp
+}
+
+// ============================================================
+// EntityRelation — directed edge between entities
+// ============================================================
+
+// EntityRelation represents a relationship between two entities.
+type EntityRelation struct {
+	ID            string
+	From          string
+	To            string
+	Kind          string
+	Directed      bool
+	EvidenceClass EvidenceClass
+	ProvenanceRef string
+	Label         string
+}
+
+// Validate checks that the relation is well-formed.
+func (r EntityRelation) Validate() error {
+	if r.ID == "" {
+		return fmt.Errorf("relation: missing ID")
+	}
+	if r.From == "" {
+		return fmt.Errorf("relation: missing from")
+	}
+	if r.To == "" {
+		return fmt.Errorf("relation: missing to")
+	}
+	if r.Kind == "" {
+		return fmt.Errorf("relation: missing kind")
+	}
+	if !r.EvidenceClass.IsValid() {
+		return fmt.Errorf("relation: invalid evidence class %q", r.EvidenceClass)
+	}
+	if r.EvidenceClass == EvidenceObserved && r.ProvenanceRef == "" {
+		return fmt.Errorf("relation: OBSERVED requires non-empty ProvenanceRef")
+	}
+	return nil
+}
+
+// clone returns a deep copy of the relation.
+func (r EntityRelation) clone() EntityRelation {
+	return r
+}
+
+// ============================================================
 // Result — generic carrier for provider output
 // ============================================================
 
