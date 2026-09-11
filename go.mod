@@ -8,7 +8,7 @@ require (
 	codeberg.org/miekg/dns v0.6.84
 	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3
 	github.com/google/uuid v1.6.0
-	github.com/gopacket/gopacket v1.7.0
+	github.com/gopacket/gopacket v1.7.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/hunydev/g729 v0.2.3-rc5
 	github.com/nyaruka/phonenumbers v1.8.1
