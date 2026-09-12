@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"sort"
 	"sync"
-	"time"
 )
 
 // ============================================================
@@ -17,16 +16,16 @@ import (
 type FindingKind string
 
 const (
-	FindingKindUnknown    FindingKind = ""
-	FindingKindIP         FindingKind = "ip"
-	FindingKindDomain     FindingKind = "domain"
-	FindingKindASN        FindingKind = "asn"
+	FindingKindUnknown     FindingKind = ""
+	FindingKindIP          FindingKind = "ip"
+	FindingKindDomain      FindingKind = "domain"
+	FindingKindASN         FindingKind = "asn"
 	FindingKindCertificate FindingKind = "certificate"
-	FindingKindCVE        FindingKind = "cve"
+	FindingKindCVE         FindingKind = "cve"
 	FindingKindOrganization FindingKind = "organization"
-	FindingKindURL        FindingKind = "url"
-	FindingKindCountry    FindingKind = "country"
-	FindingKindNetwork    FindingKind = "network"
+	FindingKindURL         FindingKind = "url"
+	FindingKindCountry     FindingKind = "country"
+	FindingKindNetwork     FindingKind = "network"
 )
 
 // Finding represents an enriched finding with explicit evidence.
@@ -39,11 +38,12 @@ type Finding struct {
 	SourceRefs    []string          // Source IDs that contributed to this finding
 	Attributes    map[string]string
 	Summary       string            // Human-readable summary
-	CreatedAt     string            // RFC3339
-	UpdatedAt     string            // RFC3339
+	CreatedAt     string            // RFC3339 (optional, preserved if provided)
+	UpdatedAt     string            // RFC3339 (optional, preserved if provided)
 }
 
 // Validate checks that the finding is well-formed.
+// Timestamps are optional; if provided they are preserved as-is.
 func (f Finding) Validate() error {
 	if f.ID == "" {
 		return fmt.Errorf("finding: missing ID")
@@ -59,12 +59,6 @@ func (f Finding) Validate() error {
 	}
 	if f.EvidenceClass == EvidenceObserved && f.ProvenanceRef == "" {
 		return fmt.Errorf("finding: OBSERVED requires non-empty ProvenanceRef")
-	}
-	if f.CreatedAt == "" {
-		return fmt.Errorf("finding: missing CreatedAt")
-	}
-	if f.UpdatedAt == "" {
-		return fmt.Errorf("finding: missing UpdatedAt")
 	}
 	return nil
 }
@@ -96,20 +90,20 @@ type FindingEvidence struct {
 	EvidenceClass EvidenceClass
 	Confidence    string
 	Explain       string
-	Timestamp     string // RFC3339
+	Timestamp     string // RFC3339 (optional, preserved if provided)
 }
 
-// FindingCorrelation represents an explicit correlation between two entities/findings.
+// FindingCorrelation represents an explicit correlation between two findings.
 type FindingCorrelation struct {
 	ID            string
-	From          string // Finding ID or Entity ID
-	To            string // Finding ID or Entity ID
+	From          string // Finding ID
+	To            string // Finding ID
 	Kind          string
 	Directed      bool
 	EvidenceClass EvidenceClass
 	ProvenanceRef string
 	Label         string
-	CreatedAt     string // RFC3339
+	CreatedAt     string // RFC3339 (optional, preserved if provided)
 }
 
 // ============================================================
@@ -138,10 +132,11 @@ func IsEnrichmentError(err error) bool {
 type EnrichmentEngine struct {
 	mu              sync.RWMutex
 	findings        map[string]Finding
-	correlations    map[string]FindingCorrelation
-	evidenceItems   map[string][]FindingEvidence
-	bySubject       map[string][]string // subject -> finding IDs
-	bySourceRef     map[string][]string // source ref -> finding IDs
+	correlations    map[string]FindingCorrelation // key = correlation ID
+	evidenceItems   map[string][]FindingEvidence  // findingID -> evidence list
+	evidenceByID    map[string]FindingEvidence    // global evidence ID -> evidence
+	bySubject       map[string][]string           // subject -> finding IDs
+	bySourceRef     map[string][]string           // source ref -> finding IDs
 	maxFindings     int
 	maxCorrelations int
 	maxEvidence     int
@@ -171,6 +166,7 @@ func NewEnrichmentEngineWithBounds(maxFindings, maxCorrelations, maxEvidence int
 		findings:        make(map[string]Finding),
 		correlations:    make(map[string]FindingCorrelation),
 		evidenceItems:   make(map[string][]FindingEvidence),
+		evidenceByID:    make(map[string]FindingEvidence),
 		bySubject:       make(map[string][]string),
 		bySourceRef:     make(map[string][]string),
 		maxFindings:     maxFindings,
@@ -181,16 +177,11 @@ func NewEnrichmentEngineWithBounds(maxFindings, maxCorrelations, maxEvidence int
 
 // AddFinding adds a finding to the engine. Validates evidence class and provenance.
 // Idempotent if identical; rejects conflicting duplicate.
+// Timestamps are preserved as provided; not auto-generated.
 func (e *EnrichmentEngine) AddFinding(f Finding) error {
 	if err := f.Validate(); err != nil {
 		return &EnrichmentError{Op: "AddFinding", Err: err}
 	}
-
-	now := time.Now().UTC().Format(time.RFC3339)
-	if f.CreatedAt == "" {
-		f.CreatedAt = now
-	}
-	f.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -215,17 +206,11 @@ func (e *EnrichmentEngine) AddFinding(f Finding) error {
 	return nil
 }
 
-// AddCorrelation adds an explicit correlation between two findings/entities.
-// Validates from/to exist, evidence class, and provenance for OBSERVED.
+// AddCorrelation adds an explicit correlation between two findings.
+// Validates from/to exist as findings, evidence class, and provenance for OBSERVED.
+// Idempotent if identical ID + identical content; rejects conflicting duplicate.
+// Timestamps are preserved as provided; not auto-generated.
 func (e *EnrichmentEngine) AddCorrelation(c FindingCorrelation) error {
-	now := time.Now().UTC().Format(time.RFC3339)
-	if c.CreatedAt == "" {
-		c.CreatedAt = now
-	}
-
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
 	if c.ID == "" {
 		return &EnrichmentError{Op: "AddCorrelation", Err: fmt.Errorf("correlation: missing ID")}
 	}
@@ -245,20 +230,37 @@ func (e *EnrichmentEngine) AddCorrelation(c FindingCorrelation) error {
 		return &EnrichmentError{Op: "AddCorrelation", Err: fmt.Errorf("correlation: OBSERVED requires non-empty ProvenanceRef")}
 	}
 
-	key := correlationKey(c.From, c.To, c.Kind, c.ID)
-	if _, exists := e.correlations[key]; exists {
-		return &EnrichmentError{Op: "AddCorrelation", Err: fmt.Errorf("correlation %q already exists", key)}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// Validate from/to exist as findings
+	if _, ok := e.findings[c.From]; !ok {
+		return &EnrichmentError{Op: "AddCorrelation", Err: fmt.Errorf("correlation: from finding %q does not exist", c.From)}
+	}
+	if _, ok := e.findings[c.To]; !ok {
+		return &EnrichmentError{Op: "AddCorrelation", Err: fmt.Errorf("correlation: to finding %q does not exist", c.To)}
+	}
+
+	// Global ID integrity: same ID must have identical content
+	if existing, exists := e.correlations[c.ID]; exists {
+		if correlationsEqual(existing, c) {
+			return nil // idempotent
+		}
+		return &EnrichmentError{Op: "AddCorrelation", Err: fmt.Errorf("correlation ID %q already exists with different content", c.ID)}
 	}
 
 	if len(e.correlations) >= e.maxCorrelations {
 		return &EnrichmentError{Op: "AddCorrelation", Err: fmt.Errorf("correlation limit reached (%d)", e.maxCorrelations)}
 	}
 
-	e.correlations[key] = c
+	e.correlations[c.ID] = c
 	return nil
 }
 
 // AddEvidence adds an evidence item to a finding.
+// Validates evidence class and provenance for OBSERVED.
+// Idempotent if identical ID + identical content; rejects conflicting duplicate.
+// Timestamps are preserved as provided; not auto-generated.
 func (e *EnrichmentEngine) AddEvidence(evid FindingEvidence) error {
 	if evid.ID == "" {
 		return &EnrichmentError{Op: "AddEvidence", Err: fmt.Errorf("evidence: missing ID")}
@@ -275,8 +277,11 @@ func (e *EnrichmentEngine) AddEvidence(evid FindingEvidence) error {
 	if evid.Source == "" {
 		return &EnrichmentError{Op: "AddEvidence", Err: fmt.Errorf("evidence: missing source")}
 	}
-	if evid.EvidenceClass != EvidenceUnknown && !evid.EvidenceClass.IsValid() {
+	if !evid.EvidenceClass.IsValid() {
 		return &EnrichmentError{Op: "AddEvidence", Err: fmt.Errorf("evidence: invalid evidence class %q", evid.EvidenceClass)}
+	}
+	if evid.EvidenceClass == EvidenceObserved && evid.ProvenanceRef == "" {
+		return &EnrichmentError{Op: "AddEvidence", Err: fmt.Errorf("evidence: OBSERVED requires non-empty ProvenanceRef")}
 	}
 
 	e.mu.Lock()
@@ -286,15 +291,23 @@ func (e *EnrichmentEngine) AddEvidence(evid FindingEvidence) error {
 		return &EnrichmentError{Op: "AddEvidence", Err: fmt.Errorf("evidence: finding %q does not exist", evid.FindingID)}
 	}
 
-	total := 0
-	for _, items := range e.evidenceItems {
-		total += len(items)
+	// Global ID integrity: same ID must have identical content
+	if existing, exists := e.evidenceByID[evid.ID]; exists {
+		if evidencesEqual(existing, evid) {
+			return nil // idempotent
+		}
+		return &EnrichmentError{Op: "AddEvidence", Err: fmt.Errorf("evidence ID %q already exists with different content", evid.ID)}
 	}
+
+	// Check total evidence bound
+	total := len(e.evidenceByID)
 	if total >= e.maxEvidence {
 		return &EnrichmentError{Op: "AddEvidence", Err: fmt.Errorf("evidence limit reached (%d)", e.maxEvidence)}
 	}
 
+	// Store in both indices
 	e.evidenceItems[evid.FindingID] = append(e.evidenceItems[evid.FindingID], evid)
+	e.evidenceByID[evid.ID] = evid
 	return nil
 }
 
@@ -325,23 +338,23 @@ func (e *EnrichmentEngine) Findings() []Finding {
 	return out
 }
 
-// Correlations returns all correlations as a deterministic slice.
+// Correlations returns all correlations as a deterministic slice (sorted by ID).
 func (e *EnrichmentEngine) Correlations() []FindingCorrelation {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	keys := make([]string, 0, len(e.correlations))
-	for k := range e.correlations {
-		keys = append(keys, k)
+	ids := make([]string, 0, len(e.correlations))
+	for id := range e.correlations {
+		ids = append(ids, id)
 	}
-	sortStrings(keys)
-	out := make([]FindingCorrelation, 0, len(keys))
-	for _, k := range keys {
-		out = append(out, e.correlations[k])
+	sortStrings(ids)
+	out := make([]FindingCorrelation, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, e.correlations[id])
 	}
 	return out
 }
 
-// EvidenceForFinding returns all evidence for a finding.
+// EvidenceForFinding returns all evidence for a finding in deterministic order (sorted by ID).
 func (e *EnrichmentEngine) EvidenceForFinding(findingID string) []FindingEvidence {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -349,9 +362,13 @@ func (e *EnrichmentEngine) EvidenceForFinding(findingID string) []FindingEvidenc
 	if len(items) == 0 {
 		return nil
 	}
-	out := make([]FindingEvidence, len(items))
-	copy(out, items)
-	return out
+	// Sort by ID for deterministic ordering
+	sorted := make([]FindingEvidence, len(items))
+	copy(sorted, items)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].ID < sorted[j].ID
+	})
+	return sorted
 }
 
 // FindingsBySubject returns findings for a subject, sorted by ID.
@@ -388,19 +405,18 @@ func (e *EnrichmentEngine) FindingsBySourceRef(src string) []Finding {
 	return out
 }
 
-// Correlation returns a correlation by from/to/kind/id.
-func (e *EnrichmentEngine) Correlation(from, to, kind, id string) (FindingCorrelation, bool) {
+// Correlation returns a correlation by ID.
+func (e *EnrichmentEngine) Correlation(id string) (FindingCorrelation, bool) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	key := correlationKey(from, to, kind, id)
-	c, ok := e.correlations[key]
+	c, ok := e.correlations[id]
 	if !ok {
 		return FindingCorrelation{}, false
 	}
 	return c, true
 }
 
-// CorrelationsFrom returns outgoing correlations for an entity.
+// CorrelationsFrom returns outgoing correlations for a finding, sorted by key.
 func (e *EnrichmentEngine) CorrelationsFrom(id string) []FindingCorrelation {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -417,7 +433,7 @@ func (e *EnrichmentEngine) CorrelationsFrom(id string) []FindingCorrelation {
 	return out
 }
 
-// CorrelationsTo returns incoming correlations for an entity.
+// CorrelationsTo returns incoming correlations for a finding, sorted by key.
 func (e *EnrichmentEngine) CorrelationsTo(id string) []FindingCorrelation {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -448,6 +464,13 @@ func (e *EnrichmentEngine) CorrelationCount() int {
 	return len(e.correlations)
 }
 
+// EvidenceCount returns the total number of evidence items.
+func (e *EnrichmentEngine) EvidenceCount() int {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return len(e.evidenceByID)
+}
+
 // MaxFindings returns the configured finding limit.
 func (e *EnrichmentEngine) MaxFindings() int { return e.maxFindings }
 
@@ -464,7 +487,7 @@ func (e *EnrichmentEngine) MaxEvidence() int { return e.maxEvidence }
 func findingsEqual(a, b Finding) bool {
 	if a.ID != b.ID || a.Subject != b.Subject || a.Kind != b.Kind ||
 		a.EvidenceClass != b.EvidenceClass || a.ProvenanceRef != b.ProvenanceRef ||
-		a.Summary != b.Summary {
+		a.Summary != b.Summary || a.CreatedAt != b.CreatedAt || a.UpdatedAt != b.UpdatedAt {
 		return false
 	}
 	if len(a.SourceRefs) != len(b.SourceRefs) {
@@ -486,8 +509,31 @@ func findingsEqual(a, b Finding) bool {
 	return true
 }
 
+func correlationsEqual(a, b FindingCorrelation) bool {
+	return a.ID == b.ID &&
+		a.From == b.From &&
+		a.To == b.To &&
+		a.Kind == b.Kind &&
+		a.Directed == b.Directed &&
+		a.EvidenceClass == b.EvidenceClass &&
+		a.ProvenanceRef == b.ProvenanceRef &&
+		a.Label == b.Label &&
+		a.CreatedAt == b.CreatedAt
+}
+
+func evidencesEqual(a, b FindingEvidence) bool {
+	return a.ID == b.ID &&
+		a.FindingID == b.FindingID &&
+		a.Type == b.Type &&
+		a.Value == b.Value &&
+		a.Source == b.Source &&
+		a.ProvenanceRef == b.ProvenanceRef &&
+		a.EvidenceClass == b.EvidenceClass &&
+		a.Confidence == b.Confidence &&
+		a.Explain == b.Explain &&
+		a.Timestamp == b.Timestamp
+}
+
 func correlationKey(from, to, kind, id string) string {
 	return from + "\x00" + to + "\x00" + kind + "\x00" + id
 }
-
-func nowRFC3339() string { return time.Now().UTC().Format(time.RFC3339) }
