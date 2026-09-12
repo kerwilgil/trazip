@@ -4,13 +4,15 @@
 package investigation
 
 import (
+	"encoding/json"
 	"fmt"
-	"sort"
 	"time"
 
+	"trazip/internal/bgp"
 	"trazip/internal/correlation"
 	"trazip/internal/model"
 	"trazip/internal/osint"
+	"trazip/internal/webintel"
 )
 
 // Type aliases for osint enrichment types — exposed for API layer
@@ -120,7 +122,7 @@ func EnrichInvestigation(inv Investigation) (EnrichmentResult, error) {
 				EvidenceClass: evidenceClassFromModelProvenance(ev.Provenance),
 				Confidence:    fmt.Sprintf("%d", ev.Confidence),
 				Explain:       ev.Explain,
-				Timestamp:     ev.Timestamp.UTC().Format(time.RFC3339),
+				Timestamp:     formatTimestamp(ev.Timestamp),
 			}
 
 			if err := engine.AddEvidence(findingEvidence); err != nil {
@@ -142,7 +144,7 @@ func EnrichInvestigation(inv Investigation) (EnrichmentResult, error) {
 				EvidenceClass: evidenceClassFromModelProvenance(ev.Provenance),
 				Confidence:    fmt.Sprintf("%d", ev.Confidence),
 				Explain:       "(counter-evidence) " + ev.Explain,
-				Timestamp:     ev.Timestamp.UTC().Format(time.RFC3339),
+				Timestamp:     formatTimestamp(ev.Timestamp),
 			}
 			if err := engine.AddEvidence(findingEvidence); err != nil {
 				return EnrichmentResult{}, fmt.Errorf("enrich: add counter-evidence %s for entry %s: %w", evidenceID, entry.ID, err)
@@ -151,10 +153,11 @@ func EnrichInvestigation(inv Investigation) (EnrichmentResult, error) {
 		}
 	}
 
-	// Build correlations from explicit relationships in the Investigation
-	// For V1.5-5, we only correlate when there is explicit shared evidence
-	// or when the same Subject appears across multiple entries.
-	buildExplicitCorrelations(engine, inv, entryMapping)
+	// NO auto-correlation by subject or shared attributes.
+	// Correlations are only added when explicitly present in snapshot data.
+	// For V1.5-5, snapshots do not carry explicit inter-finding relations,
+	// so Correlations remains empty. Future versions may add explicit
+	// correlation extraction from webintel Graph, PCAP findings, etc.
 
 	// Collect all findings
 	findings := engine.Findings()
@@ -184,52 +187,12 @@ func EnrichInvestigation(inv Investigation) (EnrichmentResult, error) {
 	}, nil
 }
 
-// buildExplicitCorrelations creates correlations ONLY when there is
-// explicit shared evidence or explicit relationship in the snapshots.
-// NO auto-correlation by shared attributes (IP, ASN, country, etc.).
-func buildExplicitCorrelations(engine *osint.EnrichmentEngine, inv Investigation, entryMapping map[string]string) {
-	// Group findings by Subject to find explicit co-occurrence
-	subjectGroups := make(map[string][]string)
-	for _, entry := range inv.Entries {
-		if entry.Snapshot.Subject != "" {
-			findingID := entryMapping[entry.ID]
-			if findingID != "" {
-				subjectGroups[entry.Snapshot.Subject] = append(subjectGroups[entry.Snapshot.Subject], findingID)
-			}
-		}
+// formatTimestamp returns RFC3339 string if t is non-zero, empty string otherwise.
+func formatTimestamp(t time.Time) string {
+	if t.IsZero() {
+		return ""
 	}
-
-	// For each subject with multiple findings, create POSSIBLE_CONTEXT correlations
-	// between them — this reflects "same subject appeared in multiple sources"
-	// without claiming a proven relationship.
-	for subject, findingIDs := range subjectGroups {
-		if len(findingIDs) < 2 {
-			continue
-		}
-		sort.Strings(findingIDs)
-		for i := 0; i < len(findingIDs); i++ {
-			for j := i + 1; j < len(findingIDs); j++ {
-				corrID := fmt.Sprintf("c_%s_%s", findingIDs[i], findingIDs[j])
-				corr := FindingCorrelation{
-					ID:            corrID,
-					From:          findingIDs[i],
-					To:            findingIDs[j],
-					Kind:          "same_subject",
-					Directed:      false,
-					EvidenceClass: EvidencePossibleContext,
-					ProvenanceRef: "",
-					Label:         fmt.Sprintf("Same subject: %s", subject),
-					CreatedAt:     "",
-				}
-				_ = engine.AddCorrelation(corr)
-			}
-		}
-	}
-
-	// If any Entry has explicit graph data (e.g., webintel Graph edges),
-	// we could add OBSERVED correlations here. For V1.5-5, we only
-	// add what is explicitly derivable from the snapshot data.
-	// Future versions may add richer correlation from PCAP graph, etc.
+	return t.UTC().Format(time.RFC3339)
 }
 
 // sourceKindToFindingKind maps correlation.SourceKind to FindingKind.
@@ -242,6 +205,10 @@ func sourceKindToFindingKind(kind correlation.SourceKind) FindingKind {
 	case correlation.SourceMonitor:
 		return FindingKindNetwork
 	case correlation.SourceVoIP:
+		return FindingKindDomain
+	case correlation.SourceWebIntel:
+		return FindingKindDomain
+	case correlation.SourceBGPIntelligence:
 		return FindingKindDomain
 	default:
 		return FindingKindUnknown
@@ -303,4 +270,234 @@ func provenanceRefFromModel(p model.Provenance) string {
 // buildProvenanceRef builds a composite provenance reference for a finding.
 func buildProvenanceRef(invID, entryID string, snap correlation.Snapshot) string {
 	return fmt.Sprintf("inv:%s/entry:%s/src:%s", invID, entryID, snap.Kind)
+}
+
+// ============================================================
+// WebIntel Adapter
+// ============================================================
+
+// ToSnapshotWebIntel adapts a completed webintel.Result into a correlation.Snapshot
+// for Investigation storage. This is a pure mapping — no recomputation, no network calls.
+func ToSnapshotWebIntel(res webintel.Result, subject, sourceID, occurredAt string) (correlation.Snapshot, error) {
+	if res.InputURL == "" && subject == "" {
+		return correlation.Snapshot{}, fmt.Errorf("webintel: missing subject")
+	}
+	if subject == "" {
+		subject = res.InputURL
+	}
+
+	// Build assessment from webintel result
+	level := model.LevelInfo
+	confidence := model.Confidence(50)
+	conclusion := "Web Intelligence analysis completed"
+	var evidence []model.Evidence
+
+	if res.Error != nil {
+		level = model.LevelHigh
+		confidence = 80
+		conclusion = "Web Intelligence analysis failed: " + res.Error.FriendlyMessageES
+		evidence = append(evidence, model.Evidence{
+			Type:       "error",
+			Value:      res.Error.TechnicalDetail,
+			Source:     "webintel",
+			Provenance: model.ProvObserved,
+			Timestamp:  time.Now().UTC(),
+			Confidence: 80,
+			Explain:    res.Error.FriendlyMessageES,
+		})
+	} else {
+		// Extract evidence from TLS, HTTP, DNS chain
+		if res.TLS != nil {
+			for _, cert := range res.TLS.Chain {
+				evidence = append(evidence, model.Evidence{
+					Type:       "certificate",
+					Value:      cert.Subject,
+					Source:     "webintel-tls",
+					Provenance: model.ProvObserved,
+					Timestamp:  time.Now().UTC(),
+					Confidence: 70,
+					Explain:    fmt.Sprintf("TLS certificate: %s (issuer: %s)", cert.Subject, cert.Issuer),
+				})
+			}
+		}
+		for _, ep := range res.ContactedEndpoints {
+			evidence = append(evidence, model.Evidence{
+				Type:       "endpoint",
+				Value:      ep.IP,
+				Source:     "webintel-http",
+				Provenance: model.ProvObserved,
+				Timestamp:  time.Now().UTC(),
+				Confidence: 60,
+				Explain:    fmt.Sprintf("Contacted endpoint: %s (%s)", ep.Hostname, ep.IP),
+			})
+		}
+		for _, hostname := range res.ExtractedHostnames {
+			evidence = append(evidence, model.Evidence{
+				Type:       "hostname",
+				Value:      hostname,
+				Source:     "webintel-extract",
+				Provenance: model.ProvExternal,
+				Timestamp:  time.Now().UTC(),
+				Confidence: 50,
+				Explain:    "Hostname extracted from response body/headers",
+			})
+		}
+	}
+
+	return correlation.Snapshot{
+		SchemaVersion: correlation.SnapshotSchemaVersion,
+		Kind:          correlation.SourceWebIntel,
+		SourceID:      sourceID,
+		Subject:       subject,
+		OccurredAt:    occurredAt,
+		Assessment: model.Assessment{
+			Conclusion:  conclusion,
+			Level:       level,
+			Confidence:  confidence,
+			Evidence:    evidence,
+			Limitations: []string{"WebIntel analysis is point-in-time; results may change"},
+		},
+	}, nil
+}
+
+// ============================================================
+// BGP Intelligence Adapter
+// ============================================================
+
+// ToSnapshotBGP adapts a completed BGP overview/security/prefixes result
+// into a correlation.Snapshot for Investigation storage.
+// This is a pure mapping — no recomputation, no network calls.
+func ToSnapshotBGP(resource string, overview *bgp.Overview, security *bgp.SecurityResult, occurredAt string) (correlation.Snapshot, error) {
+	if resource == "" {
+		return correlation.Snapshot{}, fmt.Errorf("bgp: missing resource")
+	}
+
+	level := model.LevelInfo
+	confidence := model.Confidence(50)
+	conclusion := fmt.Sprintf("BGP Intelligence summary for %s", resource)
+	var evidence []model.Evidence
+	var limitations []string
+
+	if overview != nil {
+		// Check if resource has announced prefixes (either explicit prefixes or announced space)
+		hasAnnounced := len(overview.Prefixes) > 0 || overview.AnnouncedSpaceV4 != nil || overview.AnnouncedSpaceV6 != nil
+		if hasAnnounced {
+			evidence = append(evidence, model.Evidence{
+				Type:       "bgp_announced",
+				Value:      resource,
+				Source:     "bgp-overview",
+				Provenance: model.ProvExternal,
+				Timestamp:  time.Now().UTC(),
+				Confidence: 80,
+				Explain:    fmt.Sprintf("Resource %s is announced in BGP (holder: %s)", resource, overview.Holder),
+			})
+		}
+		if len(overview.Prefixes) > 0 {
+			for _, pfx := range overview.Prefixes {
+				evidence = append(evidence, model.Evidence{
+					Type:       "bgp_prefix",
+					Value:      pfx,
+					Source:     "bgp-overview",
+					Provenance: model.ProvExternal,
+					Timestamp:  time.Now().UTC(),
+					Confidence: 70,
+					Explain:    fmt.Sprintf("Announced prefix: %s", pfx),
+				})
+			}
+		}
+		limitations = append(limitations, "BGP data sourced from RIPE RIS/RIPEstat; may have visibility gaps")
+	}
+
+	if security != nil {
+		switch security.Health.State {
+		case bgp.HealthRisk, bgp.HealthDegraded, bgp.HealthAttention:
+			level = model.LevelHigh
+			confidence = 80
+			conclusion = fmt.Sprintf("BGP security issue detected for %s: %s", resource, security.Health.State)
+		}
+		// Check RPKI validation results from States map
+		if security.RPKI.States != nil {
+			hasInvalid := false
+			for state, count := range security.RPKI.States {
+				if count > 0 && (state == bgp.RPKIInvalidASN || state == bgp.RPKIInvalidLength) {
+					hasInvalid = true
+					break
+				}
+			}
+			if hasInvalid {
+				evidence = append(evidence, model.Evidence{
+					Type:       "bgp_rpki",
+					Value:      "invalid",
+					Source:     "bgp-security",
+					Provenance: model.ProvExternal,
+					Timestamp:  time.Now().UTC(),
+					Confidence: 75,
+					Explain:    "RPKI validation found INVALID_ASN or INVALID_LENGTH",
+				})
+			}
+		}
+		// Also check detailed results
+		for _, r := range security.RPKI.Results {
+			if r.State == bgp.RPKIInvalidASN || r.State == bgp.RPKIInvalidLength {
+				evidence = append(evidence, model.Evidence{
+					Type:       "bgp_rpki",
+					Value:      fmt.Sprintf("%s: %s", r.Prefix, r.State),
+					Source:     "bgp-security",
+					Provenance: model.ProvExternal,
+					Timestamp:  time.Now().UTC(),
+					Confidence: 75,
+					Explain:    fmt.Sprintf("RPKI validation for %s: %s", r.Prefix, r.State),
+				})
+			}
+		}
+		for _, origin := range security.Origins {
+			evidence = append(evidence, model.Evidence{
+				Type:       "bgp_origin",
+				Value:      fmt.Sprintf("%d", origin),
+				Source:     "bgp-security",
+				Provenance: model.ProvExternal,
+				Timestamp:  time.Now().UTC(),
+				Confidence: 70,
+				Explain:    fmt.Sprintf("Origin ASN: %d", origin),
+			})
+		}
+		limitations = append(limitations, "BGP security analysis based on RIPEstat/RPKI; may not reflect real-time state")
+	}
+
+	if len(evidence) == 0 {
+		conclusion = fmt.Sprintf("No BGP intelligence findings for %s", resource)
+		limitations = append(limitations, "No announcements or security data found for resource")
+	}
+
+	return correlation.Snapshot{
+		SchemaVersion: correlation.SnapshotSchemaVersion,
+		Kind:          correlation.SourceBGPIntelligence,
+		SourceID:      resource,
+		Subject:       resource,
+		OccurredAt:    occurredAt,
+		Assessment: model.Assessment{
+			Conclusion:  conclusion,
+			Level:       level,
+			Confidence:  confidence,
+			Evidence:    evidence,
+			Limitations: limitations,
+		},
+	}, nil
+}
+
+// ============================================================
+// JSON serialization test helper
+// ============================================================
+
+// MarshalEnrichmentResult returns the JSON representation of an EnrichmentResult
+// using standard JSON tags for frontend compatibility.
+func MarshalEnrichmentResult(r EnrichmentResult) ([]byte, error) {
+	return json.Marshal(r)
+}
+
+// UnmarshalEnrichmentResult parses an EnrichmentResult from JSON.
+func UnmarshalEnrichmentResult(data []byte) (EnrichmentResult, error) {
+	var r EnrichmentResult
+	err := json.Unmarshal(data, &r)
+	return r, err
 }
