@@ -196,3 +196,41 @@ func (s *Service) InvestigationAddVoIPCall(investigationID string, call voip.Cal
 	}
 	return addResult(s.investigations.AddSnapshot(investigationID, snap))
 }
+
+// InvestigationEnrichResult wraps the enrichment result for the Wails binding.
+type InvestigationEnrichResult struct {
+	InvestigationID   string             `json:"investigationId"`
+	InvestigationName string           `json:"investigationName"`
+	Findings          []investigation.Finding    `json:"findings"`
+	Correlations      []investigation.FindingCorrelation `json:"correlations"`
+	Evidence          map[string][]investigation.FindingEvidence `json:"evidence"`
+	EntryMapping      map[string]string  `json:"entryMapping"`
+	Stats             investigation.EnrichmentStats    `json:"stats"`
+}
+
+// InvestigationEnrich enriches an existing Investigation by converting its
+// Entries into Findings, Evidence, and Correlations using the EnrichmentEngine.
+// This is a READ-ONLY operation — it does NOT modify the stored Investigation,
+// does NOT execute any providers, and does NOT make any network calls.
+// It only transforms and correlates evidence that is already explicitly
+// present in the Investigation's Entries.
+func (s *Service) InvestigationEnrich(id string) (InvestigationEnrichResult, error) {
+	inv, err := s.investigations.Get(id)
+	if err != nil {
+		return InvestigationEnrichResult{}, err
+	}
+	result, err := investigation.EnrichInvestigation(inv)
+	if err != nil {
+		return InvestigationEnrichResult{}, err
+	}
+	// Convert internal types to API-facing types (they're the same package)
+	return InvestigationEnrichResult{
+		InvestigationID:   result.InvestigationID,
+		InvestigationName: result.InvestigationName,
+		Findings:          result.Findings,
+		Correlations:      result.Correlations,
+		Evidence:          result.Evidence,
+		EntryMapping:      result.EntryMapping,
+		Stats:             result.Stats,
+	}, nil
+}

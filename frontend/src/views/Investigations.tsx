@@ -9,6 +9,7 @@ import {
   investigationRemoveEntry,
   investigationUpdateEntryNote,
   investigationExportReport,
+  investigationEnrich,
   type investigation,
 } from '../lib/api';
 import { LEVEL_CLASS, sourceLabel, sortTimeline, formatInstant } from '../lib/investigationHelpers';
@@ -369,6 +370,44 @@ export default function Investigations() {
                         {f.toUpperCase()}
                       </button>
                     ))}
+                  </div>
+                </div>
+
+                <div style={{ marginTop: 14 }}>
+                  <p className="dim" style={{ fontSize: 12 }}>{t('Enriquecer investigación')}</p>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button
+                      className="btn"
+                      style={{ fontSize: 11.5 }}
+                      onClick={async () => {
+                        if (!selected) return;
+                        try {
+                          const result = await investigationEnrich(selected.id);
+                          if (result.findings.length === 0) {
+                            setError(t('No se pudieron generar hallazgos. Añade evidencias primero.'));
+                          } else {
+                            setError(null);
+                            // Show enrichment result - for now just log and show count
+                            console.log('Enrichment result:', result);
+                            alert(`${t('Enriquecimiento completado')}: ${result.stats.totalFindings} ${t('hallazgos')}, ${result.stats.totalCorrelations} ${t('correlaciones')}, ${result.stats.totalEvidence} ${t('evidencias')}`);
+                          }
+                        } catch (e) {
+                          setError(String(e));
+                        }
+                      }}
+                    >
+                      {t('Enriquecer')}
+                    </button>
+                    <button
+                      className="btn ghost"
+                      style={{ fontSize: 11.5 }}
+                      onClick={() => {
+                        if (!selected) return;
+                        investigationEnrich(selected.id).then(r => console.log('Enrichment:', r));
+                      }}
+                    >
+                      {t('Ver en consola')}
+                    </button>
                   </div>
                 </div>
               </div>
