@@ -10,10 +10,21 @@ import (
 )
 
 // ============================================================
-// Activity Class — hard separation between passive and active
+// Default bounds for OSINT sub-systems
 // ============================================================
 
-// ActivityClass distinguishes the nature of an OSINT operation.
+// Default bounds for the entity graph.
+const (
+	DefaultMaxEntities  = 500
+	DefaultMaxRelations = 1000
+)
+
+// Default bounds for the enrichment engine.
+const (
+	DefaultMaxFindings      = 500
+	DefaultMaxCorrelations  = 1000
+	DefaultMaxEvidence      = 2000
+)
 type ActivityClass int
 
 const (
@@ -273,7 +284,7 @@ func (m ProviderMeta) Validate() error {
 }
 
 // ============================================================
-// Evidence Class — classification of relationship evidence
+// EvidenceClass classifies the strength of evidence for a relationship.
 // ============================================================
 
 // EvidenceClass classifies the strength of evidence for a relationship.

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"trazip/internal/correlation"
 	"trazip/internal/diagnosis"
@@ -444,5 +445,151 @@ func TestInvestigationAddDuplicateReflectsExistingInWrapper(t *testing.T) {
 	}
 	if second.Entry.ID != first.Entry.ID {
 		t.Error("expected the same Entry back on a duplicate add")
+	}
+}
+
+func TestInvestigationEnrich_EmptyInvestigation(t *testing.T) {
+	s := newTestServiceWithInvestigations(t)
+	inv, _ := s.InvestigationCreate("empty-case", "")
+
+	res, err := s.InvestigationEnrich(inv.ID)
+	if err != nil {
+		t.Fatalf("InvestigationEnrich: %v", err)
+	}
+	if res.InvestigationID != inv.ID {
+		t.Errorf("InvestigationID = %q, want %q", res.InvestigationID, inv.ID)
+	}
+	if len(res.Findings) != 0 {
+		t.Errorf("Findings = %d, want 0 for empty investigation", len(res.Findings))
+	}
+	if len(res.Correlations) != 0 {
+		t.Errorf("Correlations = %d, want 0 for empty investigation", len(res.Correlations))
+	}
+	if len(res.Evidence) != 0 {
+		t.Errorf("Evidence = %d, want 0 for empty investigation", len(res.Evidence))
+	}
+	if res.Stats.TotalFindings != 0 {
+		t.Errorf("Stats.TotalFindings = %d, want 0", res.Stats.TotalFindings)
+	}
+	if len(res.EntryMapping) != 0 {
+		t.Errorf("EntryMapping = %d, want 0 for empty investigation", len(res.EntryMapping))
+	}
+}
+
+func TestInvestigationEnrich_ValidCase(t *testing.T) {
+	s := newTestServiceWithInvestigations(t)
+	inv, _ := s.InvestigationCreate("enrich-test", "")
+
+	summary := correlation.PcapIncidentSummary{
+		Summary:    "Scan detected",
+		Level:      model.LevelHigh,
+		Confidence: 85,
+		Findings: []correlation.PcapFinding{
+			{ID: "f1", Category: "scan_vertical", Summary: "Vertical scan from 192.0.2.100", Level: model.LevelHigh, Confidence: 85, SourceArea: correlation.SourceAreaScanDetection},
+		},
+		Evidence: []model.Evidence{
+			{Type: "scan", Value: "vertical", Source: "pcap", Provenance: model.ProvExternal, Timestamp: time.Now().UTC(), Confidence: 85, Explain: "Vertical scan detected"},
+		},
+	}
+	s.InvestigationAddPcap(inv.ID, summary, "capture.pcap", "session-1", "2026-01-01T10:00:00Z")
+
+	res, err := s.InvestigationEnrich(inv.ID)
+	if err != nil {
+		t.Fatalf("InvestigationEnrich: %v", err)
+	}
+
+	if len(res.Findings) != 1 {
+		t.Fatalf("Findings = %d, want 1", len(res.Findings))
+	}
+	finding := res.Findings[0]
+	if finding.Kind != "network" {
+		t.Errorf("Finding.Kind = %q, want 'network'", finding.Kind)
+	}
+	if finding.EvidenceClass != investigation.EvidencePossibleContext {
+		t.Errorf("Finding.EvidenceClass = %v, want EvidencePossibleContext", finding.EvidenceClass)
+	}
+	if len(res.Evidence[finding.ID]) != 1 {
+		t.Errorf("Evidence count = %d, want 1", len(res.Evidence[finding.ID]))
+	}
+
+	// Stored investigation should be unchanged
+	stored, _ := s.InvestigationGet(inv.ID)
+	if len(stored.Entries) != 1 {
+		t.Errorf("stored investigation modified: Entries = %d, want 1", len(stored.Entries))
+	}
+}
+
+func TestInvestigationEnrich_NonexistentInvestigation(t *testing.T) {
+	s := newTestServiceWithInvestigations(t)
+	_, err := s.InvestigationEnrich("00000000-0000-0000-0000-000000000000")
+	if err == nil {
+		t.Error("expected error for nonexistent investigation")
+	}
+}
+
+func TestInvestigationEnrich_CorruptInvestigation(t *testing.T) {
+	s := newTestServiceWithInvestigations(t)
+	// Test with invalid UUID format
+	_, err := s.InvestigationEnrich("not-a-valid-uuid")
+	if err == nil {
+		t.Error("expected error for invalid UUID")
+	}
+}
+
+func TestInvestigationEnrich_EmptyArraysSerializeSafely(t *testing.T) {
+	s := newTestServiceWithInvestigations(t)
+	inv, _ := s.InvestigationCreate("empty-enrich", "")
+
+	res, err := s.InvestigationEnrich(inv.ID)
+	if err != nil {
+		t.Fatalf("InvestigationEnrich: %v", err)
+	}
+
+	// Ensure empty slices/maps serialize as empty arrays/objects, not null
+	// This tests JSON serialization safety for the frontend
+	if res.Findings == nil {
+		t.Error("Findings should be empty slice, not nil")
+	}
+	if res.Correlations == nil {
+		t.Error("Correlations should be empty slice, not nil")
+	}
+	if res.Evidence == nil {
+		t.Error("Evidence should be empty map, not nil")
+	}
+	if res.EntryMapping == nil {
+		t.Error("EntryMapping should be empty map, not nil")
+	}
+	if res.Stats.BySourceKind == nil {
+		t.Error("Stats.BySourceKind should be empty map, not nil")
+	}
+}
+
+func TestInvestigationEnrich_StoredInvestigationUnchanged(t *testing.T) {
+	s := newTestServiceWithInvestigations(t)
+	inv, _ := s.InvestigationCreate("enrich-no-mutate", "")
+
+	summary := correlation.PcapIncidentSummary{
+		Summary:    "Test finding",
+		Level:      model.LevelMedium,
+		Confidence: 70,
+	}
+	s.InvestigationAddPcap(inv.ID, summary, "capture.pcap", "session-1", "2026-01-01T10:00:00Z")
+
+	// Get original investigation
+	before, _ := s.InvestigationGet(inv.ID)
+
+	// Enrich
+	_, err := s.InvestigationEnrich(inv.ID)
+	if err != nil {
+		t.Fatalf("InvestigationEnrich: %v", err)
+	}
+
+	// Stored investigation should be unchanged
+	after, _ := s.InvestigationGet(inv.ID)
+	if len(after.Entries) != 1 {
+		t.Errorf("Entries = %d, want 1", len(after.Entries))
+	}
+	if after.UpdatedAt != before.UpdatedAt {
+		t.Errorf("UpdatedAt changed from %q to %q — enrichment should not mutate stored investigation", before.UpdatedAt, after.UpdatedAt)
 	}
 }

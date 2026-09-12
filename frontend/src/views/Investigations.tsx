@@ -9,6 +9,7 @@ import {
   investigationRemoveEntry,
   investigationUpdateEntryNote,
   investigationExportReport,
+  investigationEnrich,
   type investigation,
 } from '../lib/api';
 import { LEVEL_CLASS, sourceLabel, sortTimeline, formatInstant } from '../lib/investigationHelpers';
@@ -132,6 +133,9 @@ export default function Investigations() {
   const [editName, setEditName] = useState('');
   const [editObjective, setEditObjective] = useState('');
 
+  const [enriching, setEnriching] = useState(false);
+  const [enrichmentResult, setEnrichmentResult] = useState<string>('');
+
   async function refreshList() {
     const res = await investigationList();
     setList(res.investigations ?? []);
@@ -147,6 +151,7 @@ export default function Investigations() {
     setSelectedId(id);
     setError(null);
     setEditing(false);
+    setEnrichmentResult('');
     try {
       const inv = await investigationGet(id);
       setSelected(inv);
@@ -369,6 +374,35 @@ export default function Investigations() {
                         {f.toUpperCase()}
                       </button>
                     ))}
+                  </div>
+                </div>
+
+                <div style={{ marginTop: 14 }}>
+                  <p className="dim" style={{ fontSize: 12 }}>{t('Enriquecer investigación')}</p>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button
+                      className="btn"
+                      style={{ fontSize: 11.5 }}
+                      disabled={enriching}
+                      onClick={async () => {
+                        if (!selected) return;
+                        setEnriching(true);
+                        try {
+                          const result = await investigationEnrich(selected.id);
+                          if (result.findings.length === 0) {
+                            setError(t('No se pudieron generar hallazgos. Añade evidencias primero.'));
+                          } else {
+                            setError(`${t('Enriquecimiento completado')}: ${result.stats.totalFindings} ${t('hallazgos')}, ${result.stats.totalCorrelations} ${t('correlaciones')}, ${result.stats.totalEvidence} ${t('evidencias')}`);
+                          }
+                        } catch (e) {
+                          setError(String(e));
+                        } finally {
+                          setEnriching(false);
+                        }
+                      }}
+                    >
+                      {enriching ? t('Enriqueciendo...') : t('Enriquecer')}
+                    </button>
                   </div>
                 </div>
               </div>
