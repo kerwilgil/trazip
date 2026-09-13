@@ -14,6 +14,7 @@ import {httpintel} from '../models';
 import {ipcalc} from '../models';
 import {monitor} from '../models';
 import {correlation} from '../models';
+import {webintel} from '../models';
 import {investigation} from '../models';
 import {report} from '../models';
 import {lab} from '../models';
@@ -26,7 +27,6 @@ import {reputation} from '../models';
 import {tlsintel} from '../models';
 import {threatfeed} from '../models';
 import {quality} from '../models';
-import {webintel} from '../models';
 import {wifi} from '../models';
 
 export function AnalyzePcap(arg1:string):Promise<api.PcapResult>;
@@ -123,6 +123,8 @@ export function IPCalcSplit(arg1:string,arg2:number):Promise<ipcalc.SplitResult>
 
 export function IPCalcVLSM(arg1:string,arg2:Array<ipcalc.VLSMRequest>):Promise<ipcalc.VLSMResult>;
 
+export function InvestigationAddBGP(arg1:string,arg2:string,arg3:bgp.Overview,arg4:bgp.SecurityResult,arg5:string):Promise<api.InvestigationAddResult>;
+
 export function InvestigationAddDiagnose(arg1:string,arg2:string):Promise<api.InvestigationAddResult>;
 
 export function InvestigationAddMonitorEvent(arg1:string,arg2:monitor.DegradationEvent):Promise<api.InvestigationAddResult>;
@@ -131,9 +133,13 @@ export function InvestigationAddPcap(arg1:string,arg2:correlation.PcapIncidentSu
 
 export function InvestigationAddVoIPCall(arg1:string,arg2:voip.Call):Promise<api.InvestigationAddResult>;
 
+export function InvestigationAddWebIntel(arg1:string,arg2:webintel.Result,arg3:string,arg4:string,arg5:string):Promise<api.InvestigationAddResult>;
+
 export function InvestigationCreate(arg1:string,arg2:string):Promise<investigation.Investigation>;
 
 export function InvestigationDelete(arg1:string):Promise<void>;
+
+export function InvestigationEnrich(arg1:string):Promise<api.InvestigationEnrichResult>;
 
 export function InvestigationGet(arg1:string):Promise<investigation.Investigation>;
 

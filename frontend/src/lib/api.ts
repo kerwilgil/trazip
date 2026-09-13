@@ -1957,6 +1957,9 @@ export async function investigationAddBGP(
   if (!hasRuntime()) {
     return api.InvestigationAddResult.createFrom({ existing: false });
   }
+  if (!overview || !security) {
+    return api.InvestigationAddResult.createFrom({ existing: false });
+  }
   return goInvestigationAddBGP(investigationID, resource, overview, security, occurredAt) as unknown as Promise<api.InvestigationAddResult>;
 }
 

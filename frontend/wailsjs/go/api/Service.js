@@ -190,6 +190,10 @@ export function IPCalcVLSM(arg1, arg2) {
   return window['go']['api']['Service']['IPCalcVLSM'](arg1, arg2);
 }
 
+export function InvestigationAddBGP(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['api']['Service']['InvestigationAddBGP'](arg1, arg2, arg3, arg4, arg5);
+}
+
 export function InvestigationAddDiagnose(arg1, arg2) {
   return window['go']['api']['Service']['InvestigationAddDiagnose'](arg1, arg2);
 }
@@ -206,12 +210,20 @@ export function InvestigationAddVoIPCall(arg1, arg2) {
   return window['go']['api']['Service']['InvestigationAddVoIPCall'](arg1, arg2);
 }
 
+export function InvestigationAddWebIntel(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['api']['Service']['InvestigationAddWebIntel'](arg1, arg2, arg3, arg4, arg5);
+}
+
 export function InvestigationCreate(arg1, arg2) {
   return window['go']['api']['Service']['InvestigationCreate'](arg1, arg2);
 }
 
 export function InvestigationDelete(arg1) {
   return window['go']['api']['Service']['InvestigationDelete'](arg1);
+}
+
+export function InvestigationEnrich(arg1) {
+  return window['go']['api']['Service']['InvestigationEnrich'](arg1);
 }
 
 export function InvestigationGet(arg1) {
