@@ -105,6 +105,8 @@ import {
   InvestigationAddPcap as goInvestigationAddPcap,
   InvestigationAddMonitorEvent as goInvestigationAddMonitorEvent,
   InvestigationAddVoIPCall as goInvestigationAddVoIPCall,
+  InvestigationAddWebIntel as goInvestigationAddWebIntel,
+  InvestigationAddBGP as goInvestigationAddBGP,
   SelfTestLocal as goSelfTestLocal,
   ListOSINTProviders as goListOSINTProviders,
 } from '../../wailsjs/go/api/Service';
@@ -1928,6 +1930,34 @@ export async function investigationEnrich(id: string): Promise<InvestigationEnri
     entryMapping: {},
     stats: { totalFindings: 0, totalCorrelations: 0, totalEvidence: 0, bySourceKind: {} },
   };
+}
+
+// ---- Investigation WebIntel / BGP Integration (V1.5-5) ----
+
+export async function investigationAddWebIntel(
+  investigationID: string,
+  res: webintel.Result,
+  subject: string,
+  sourceID: string,
+  occurredAt: string
+): Promise<api.InvestigationAddResult> {
+  if (!hasRuntime()) {
+    return api.InvestigationAddResult.createFrom({ existing: false });
+  }
+  return goInvestigationAddWebIntel(investigationID, res, subject, sourceID, occurredAt) as unknown as Promise<api.InvestigationAddResult>;
+}
+
+export async function investigationAddBGP(
+  investigationID: string,
+  resource: string,
+  overview: bgp.Overview | null,
+  security: bgp.SecurityResult | null,
+  occurredAt: string
+): Promise<api.InvestigationAddResult> {
+  if (!hasRuntime()) {
+    return api.InvestigationAddResult.createFrom({ existing: false });
+  }
+  return goInvestigationAddBGP(investigationID, resource, overview, security, occurredAt) as unknown as Promise<api.InvestigationAddResult>;
 }
 
 // ---- Modo laboratorio (Fase 5, módulo 27) ----

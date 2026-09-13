@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"strings"
 
+	"trazip/internal/bgp"
 	"trazip/internal/correlation"
 	"trazip/internal/diagnosis"
 	"trazip/internal/investigation"
 	"trazip/internal/monitor"
 	"trazip/internal/report"
 	"trazip/internal/voip"
+	"trazip/internal/webintel"
 )
 
 // InvestigationAddResult wraps AddSnapshot's own (Entry, existing bool)
@@ -193,6 +195,28 @@ func (s *Service) InvestigationAddVoIPCall(investigationID string, call voip.Cal
 	snap, ok := voip.ToSnapshot(&call)
 	if !ok {
 		return InvestigationAddResult{}, fmt.Errorf("esta llamada todavía no tiene un diagnóstico para agregar")
+	}
+	return addResult(s.investigations.AddSnapshot(investigationID, snap))
+}
+
+// InvestigationAddWebIntel persists a completed WebIntel analysis result —
+// it never runs WebIntel again. It stores the result as a Snapshot for
+// later enrichment. NO network calls are made.
+func (s *Service) InvestigationAddWebIntel(investigationID string, res webintel.Result, subject, sourceID, occurredAt string) (InvestigationAddResult, error) {
+	snap, err := investigation.ToSnapshotWebIntel(res, subject, sourceID, occurredAt)
+	if err != nil {
+		return InvestigationAddResult{}, fmt.Errorf("webintel: %w", err)
+	}
+	return addResult(s.investigations.AddSnapshot(investigationID, snap))
+}
+
+// InvestigationAddBGP persists a completed BGP Intelligence result —
+// it never runs BGP Intelligence again. It stores the result as a Snapshot
+// for later enrichment. NO network calls are made.
+func (s *Service) InvestigationAddBGP(investigationID string, resource string, overview *bgp.Overview, security *bgp.SecurityResult, occurredAt string) (InvestigationAddResult, error) {
+	snap, err := investigation.ToSnapshotBGP(resource, overview, nil, "")
+	if err != nil {
+		return InvestigationAddResult{}, fmt.Errorf("bgp: %w", err)
 	}
 	return addResult(s.investigations.AddSnapshot(investigationID, snap))
 }

@@ -30,16 +30,16 @@ const (
 
 // Finding represents an enriched finding with explicit evidence.
 type Finding struct {
-	ID            string
-	Subject       string
-	Kind          FindingKind
-	EvidenceClass EvidenceClass
-	ProvenanceRef string
-	SourceRefs    []string          // Source IDs that contributed to this finding
-	Attributes    map[string]string
-	Summary       string            // Human-readable summary
-	CreatedAt     string            // RFC3339 (optional, preserved if provided)
-	UpdatedAt     string            // RFC3339 (optional, preserved if provided)
+	ID            string            `json:"id"`
+	Subject       string            `json:"subject"`
+	Kind          FindingKind       `json:"kind"`
+	EvidenceClass EvidenceClass     `json:"evidenceClass"`
+	ProvenanceRef string            `json:"provenanceRef"`
+	SourceRefs    []string          `json:"sourceRefs"`    // Source IDs that contributed to this finding
+	Attributes    map[string]string `json:"attributes"`
+	Summary       string            `json:"summary"`       // Human-readable summary
+	CreatedAt     string            `json:"createdAt"`     // RFC3339 (optional, preserved if provided)
+	UpdatedAt     string            `json:"updatedAt"`     // RFC3339 (optional, preserved if provided)
 }
 
 // Validate checks that the finding is well-formed.
@@ -81,29 +81,29 @@ func (f Finding) clone() Finding {
 
 // FindingEvidence represents a single piece of evidence for a finding.
 type FindingEvidence struct {
-	ID            string
-	FindingID     string
-	Type          string
-	Value         string
-	Source        string
-	ProvenanceRef string
-	EvidenceClass EvidenceClass
-	Confidence    string
-	Explain       string
-	Timestamp     string // RFC3339 (optional, preserved if provided)
+	ID            string        `json:"id"`
+	FindingID     string        `json:"findingId"`
+	Type          string        `json:"type"`
+	Value         string        `json:"value"`
+	Source        string        `json:"source"`
+	ProvenanceRef string        `json:"provenanceRef"`
+	EvidenceClass EvidenceClass `json:"evidenceClass"`
+	Confidence    string        `json:"confidence"`
+	Explain       string        `json:"explain"`
+	Timestamp     string        `json:"timestamp"` // RFC3339 (optional, preserved if provided)
 }
 
 // FindingCorrelation represents an explicit correlation between two findings.
 type FindingCorrelation struct {
-	ID            string
-	From          string // Finding ID
-	To            string // Finding ID
-	Kind          string
-	Directed      bool
-	EvidenceClass EvidenceClass
-	ProvenanceRef string
-	Label         string
-	CreatedAt     string // RFC3339 (optional, preserved if provided)
+	ID            string        `json:"id"`
+	From          string        `json:"from"`       // Finding ID
+	To            string        `json:"to"`         // Finding ID
+	Kind          string        `json:"kind"`
+	Directed      bool          `json:"directed"`
+	EvidenceClass EvidenceClass `json:"evidenceClass"`
+	ProvenanceRef string        `json:"provenanceRef"`
+	Label         string        `json:"label"`
+	CreatedAt     string        `json:"createdAt"` // RFC3339 (optional, preserved if provided)
 }
 
 // ============================================================

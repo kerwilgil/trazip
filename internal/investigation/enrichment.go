@@ -195,7 +195,23 @@ func formatTimestamp(t time.Time) string {
 	return t.UTC().Format(time.RFC3339)
 }
 
+// parseOrZeroTime parses an RFC3339 string or returns zero time if empty/invalid.
+// Does NOT use time.Now() — returns zero time on parse failure.
+func parseOrZeroTime(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t
+	}
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t
+	}
+	return time.Time{}
+}
+
 // sourceKindToFindingKind maps correlation.SourceKind to FindingKind.
+// P1-07: Semantic mapping based on target type when possible.
 func sourceKindToFindingKind(kind correlation.SourceKind) FindingKind {
 	switch kind {
 	case correlation.SourceDiagnose:
@@ -207,9 +223,11 @@ func sourceKindToFindingKind(kind correlation.SourceKind) FindingKind {
 	case correlation.SourceVoIP:
 		return FindingKindDomain
 	case correlation.SourceWebIntel:
-		return FindingKindDomain
+		// WebIntel analyzes URLs/domains - could be domain, URL, or IP
+		return FindingKindDomain // Default, could be enhanced with target analysis
 	case correlation.SourceBGPIntelligence:
-		return FindingKindDomain
+		// BGP Intelligence analyzes ASNs, prefixes, IPs
+		return FindingKindNetwork // Default, could be ASN/IP/Prefix based on resource
 	default:
 		return FindingKindUnknown
 	}
@@ -268,8 +286,13 @@ func provenanceRefFromModel(p model.Provenance) string {
 }
 
 // buildProvenanceRef builds a composite provenance reference for a finding.
+// P1-07: Includes source_id when available.
 func buildProvenanceRef(invID, entryID string, snap correlation.Snapshot) string {
-	return fmt.Sprintf("inv:%s/entry:%s/src:%s", invID, entryID, snap.Kind)
+	srcID := snap.SourceID
+	if srcID == "" {
+		srcID = "none"
+	}
+	return fmt.Sprintf("inv:%s/entry:%s/src_kind:%s/src_id:%s", invID, entryID, snap.Kind, srcID)
 }
 
 // ============================================================
@@ -278,12 +301,20 @@ func buildProvenanceRef(invID, entryID string, snap correlation.Snapshot) string
 
 // ToSnapshotWebIntel adapts a completed webintel.Result into a correlation.Snapshot
 // for Investigation storage. This is a pure mapping — no recomputation, no network calls.
+// NO time.Now() — timestamps are derived from the result or provided occurredAt.
 func ToSnapshotWebIntel(res webintel.Result, subject, sourceID, occurredAt string) (correlation.Snapshot, error) {
 	if res.InputURL == "" && subject == "" {
 		return correlation.Snapshot{}, fmt.Errorf("webintel: missing subject")
 	}
 	if subject == "" {
 		subject = res.InputURL
+	}
+
+	// Use provided occurredAt or derive from result
+	ts := parseOrZeroTime(occurredAt)
+	if ts.IsZero() && res.DurationMs > 0 {
+		// Approximate: occurredAt = now - duration (best effort, not used for ordering)
+		// But we avoid time.Now() entirely — leave zero if no explicit timestamp
 	}
 
 	// Build assessment from webintel result
@@ -301,7 +332,7 @@ func ToSnapshotWebIntel(res webintel.Result, subject, sourceID, occurredAt strin
 			Value:      res.Error.TechnicalDetail,
 			Source:     "webintel",
 			Provenance: model.ProvObserved,
-			Timestamp:  time.Now().UTC(),
+			Timestamp:  ts,
 			Confidence: 80,
 			Explain:    res.Error.FriendlyMessageES,
 		})
@@ -314,7 +345,7 @@ func ToSnapshotWebIntel(res webintel.Result, subject, sourceID, occurredAt strin
 					Value:      cert.Subject,
 					Source:     "webintel-tls",
 					Provenance: model.ProvObserved,
-					Timestamp:  time.Now().UTC(),
+					Timestamp:  ts,
 					Confidence: 70,
 					Explain:    fmt.Sprintf("TLS certificate: %s (issuer: %s)", cert.Subject, cert.Issuer),
 				})
@@ -326,7 +357,7 @@ func ToSnapshotWebIntel(res webintel.Result, subject, sourceID, occurredAt strin
 				Value:      ep.IP,
 				Source:     "webintel-http",
 				Provenance: model.ProvObserved,
-				Timestamp:  time.Now().UTC(),
+				Timestamp:  ts,
 				Confidence: 60,
 				Explain:    fmt.Sprintf("Contacted endpoint: %s (%s)", ep.Hostname, ep.IP),
 			})
@@ -337,7 +368,7 @@ func ToSnapshotWebIntel(res webintel.Result, subject, sourceID, occurredAt strin
 				Value:      hostname,
 				Source:     "webintel-extract",
 				Provenance: model.ProvExternal,
-				Timestamp:  time.Now().UTC(),
+				Timestamp:  ts,
 				Confidence: 50,
 				Explain:    "Hostname extracted from response body/headers",
 			})
@@ -367,10 +398,13 @@ func ToSnapshotWebIntel(res webintel.Result, subject, sourceID, occurredAt strin
 // ToSnapshotBGP adapts a completed BGP overview/security/prefixes result
 // into a correlation.Snapshot for Investigation storage.
 // This is a pure mapping — no recomputation, no network calls.
+// NO time.Now() — timestamps are derived from the result or provided occurredAt.
 func ToSnapshotBGP(resource string, overview *bgp.Overview, security *bgp.SecurityResult, occurredAt string) (correlation.Snapshot, error) {
 	if resource == "" {
 		return correlation.Snapshot{}, fmt.Errorf("bgp: missing resource")
 	}
+
+	ts := parseOrZeroTime(occurredAt)
 
 	level := model.LevelInfo
 	confidence := model.Confidence(50)
@@ -387,7 +421,7 @@ func ToSnapshotBGP(resource string, overview *bgp.Overview, security *bgp.Securi
 				Value:      resource,
 				Source:     "bgp-overview",
 				Provenance: model.ProvExternal,
-				Timestamp:  time.Now().UTC(),
+				Timestamp:  ts,
 				Confidence: 80,
 				Explain:    fmt.Sprintf("Resource %s is announced in BGP (holder: %s)", resource, overview.Holder),
 			})
@@ -399,7 +433,7 @@ func ToSnapshotBGP(resource string, overview *bgp.Overview, security *bgp.Securi
 					Value:      pfx,
 					Source:     "bgp-overview",
 					Provenance: model.ProvExternal,
-					Timestamp:  time.Now().UTC(),
+					Timestamp:  ts,
 					Confidence: 70,
 					Explain:    fmt.Sprintf("Announced prefix: %s", pfx),
 				})
@@ -409,11 +443,19 @@ func ToSnapshotBGP(resource string, overview *bgp.Overview, security *bgp.Securi
 	}
 
 	if security != nil {
+		// P1-03: BGP Attention semantics - NO auto-elevation of HealthAttention to LevelHigh
+		// HealthRisk / HealthDegraded may elevate severity; HealthAttention does NOT.
 		switch security.Health.State {
-		case bgp.HealthRisk, bgp.HealthDegraded, bgp.HealthAttention:
+		case bgp.HealthRisk, bgp.HealthDegraded:
 			level = model.LevelHigh
 			confidence = 80
 			conclusion = fmt.Sprintf("BGP security issue detected for %s: %s", resource, security.Health.State)
+		case bgp.HealthAttention:
+			// P1-03: MOAS/HealthAttention does NOT automatically become LevelHigh
+			// Keep at Info level but add evidence
+			level = model.LevelInfo
+			confidence = 70
+			conclusion = fmt.Sprintf("BGP attention for %s: %s", resource, security.Health.State)
 		}
 		// Check RPKI validation results from States map
 		if security.RPKI.States != nil {
@@ -430,7 +472,7 @@ func ToSnapshotBGP(resource string, overview *bgp.Overview, security *bgp.Securi
 					Value:      "invalid",
 					Source:     "bgp-security",
 					Provenance: model.ProvExternal,
-					Timestamp:  time.Now().UTC(),
+					Timestamp:  ts,
 					Confidence: 75,
 					Explain:    "RPKI validation found INVALID_ASN or INVALID_LENGTH",
 				})
@@ -444,7 +486,7 @@ func ToSnapshotBGP(resource string, overview *bgp.Overview, security *bgp.Securi
 					Value:      fmt.Sprintf("%s: %s", r.Prefix, r.State),
 					Source:     "bgp-security",
 					Provenance: model.ProvExternal,
-					Timestamp:  time.Now().UTC(),
+					Timestamp:  ts,
 					Confidence: 75,
 					Explain:    fmt.Sprintf("RPKI validation for %s: %s", r.Prefix, r.State),
 				})
@@ -456,7 +498,7 @@ func ToSnapshotBGP(resource string, overview *bgp.Overview, security *bgp.Securi
 				Value:      fmt.Sprintf("%d", origin),
 				Source:     "bgp-security",
 				Provenance: model.ProvExternal,
-				Timestamp:  time.Now().UTC(),
+				Timestamp:  ts,
 				Confidence: 70,
 				Explain:    fmt.Sprintf("Origin ASN: %d", origin),
 			})

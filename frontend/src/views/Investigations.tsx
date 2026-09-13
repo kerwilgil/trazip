@@ -11,9 +11,14 @@ import {
   investigationExportReport,
   investigationEnrich,
   type investigation,
+  type Finding,
+  type FindingEvidence,
+  type FindingCorrelation,
+  type EnrichmentStats,
 } from '../lib/api';
 import { LEVEL_CLASS, sourceLabel, sortTimeline, formatInstant } from '../lib/investigationHelpers';
 import { useI18n } from '../lib/i18n';
+import EnrichmentPanel from '../components/EnrichmentPanel';
 
 const NO_BACKEND = 'Necesita el runtime Wails (app de escritorio). En el preview del navegador no hay backend.';
 
@@ -134,7 +139,13 @@ export default function Investigations() {
   const [editObjective, setEditObjective] = useState('');
 
   const [enriching, setEnriching] = useState(false);
-  const [enrichmentResult, setEnrichmentResult] = useState<string>('');
+  const [enrichmentResult, setEnrichmentResult] = useState<{
+    stats: EnrichmentStats;
+    findings: Finding[];
+    correlations: FindingCorrelation[];
+    evidence: Record<string, FindingEvidence[]>;
+  } | null>(null);
+  const [enrichmentError, setEnrichmentError] = useState<string | null>(null);
 
   async function refreshList() {
     const res = await investigationList();
@@ -151,7 +162,8 @@ export default function Investigations() {
     setSelectedId(id);
     setError(null);
     setEditing(false);
-    setEnrichmentResult('');
+    setEnrichmentResult(null);
+    setEnrichmentError(null);
     try {
       const inv = await investigationGet(id);
       setSelected(inv);
@@ -387,15 +399,22 @@ export default function Investigations() {
                       onClick={async () => {
                         if (!selected) return;
                         setEnriching(true);
+                        setEnrichmentError(null);
+                        setEnrichmentResult(null);
                         try {
                           const result = await investigationEnrich(selected.id);
                           if (result.findings.length === 0) {
-                            setError(t('No se pudieron generar hallazgos. Añade evidencias primero.'));
+                            setEnrichmentError(t('No se pudieron generar hallazgos. Añade evidencias primero.'));
                           } else {
-                            setError(`${t('Enriquecimiento completado')}: ${result.stats.totalFindings} ${t('hallazgos')}, ${result.stats.totalCorrelations} ${t('correlaciones')}, ${result.stats.totalEvidence} ${t('evidencias')}`);
+                            setEnrichmentResult({
+                              stats: result.stats,
+                              findings: result.findings,
+                              correlations: result.correlations,
+                              evidence: result.evidence,
+                            });
                           }
                         } catch (e) {
-                          setError(String(e));
+                          setEnrichmentError(String(e));
                         } finally {
                           setEnriching(false);
                         }
@@ -405,6 +424,15 @@ export default function Investigations() {
                     </button>
                   </div>
                 </div>
+
+                {enrichmentError && (
+                  <div className="note" style={{ marginTop: 14 }}>{enrichmentError}</div>
+                )}
+
+                {enrichmentResult && (
+                  <EnrichmentPanel result={enrichmentResult} t={t} />
+                )}
+
               </div>
 
               <h3 style={{ marginTop: 20 }}>{t('Timeline')}</h3>
