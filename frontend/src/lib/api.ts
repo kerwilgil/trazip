@@ -1950,17 +1950,16 @@ export async function investigationAddWebIntel(
 export async function investigationAddBGP(
   investigationID: string,
   resource: string,
-  overview: bgp.Overview | null,
-  security: bgp.SecurityResult | null,
+  input: { overview?: bgp.Overview | null; security?: bgp.SecurityResult | null },
   occurredAt: string
 ): Promise<api.InvestigationAddResult> {
   if (!hasRuntime()) {
     return api.InvestigationAddResult.createFrom({ existing: false });
   }
-  if (!overview || !security) {
-    return api.InvestigationAddResult.createFrom({ existing: false });
+  if (!input.overview && !input.security) {
+    throw new Error("investigationAddBGP: overview and security are both null; provide at least one");
   }
-  return goInvestigationAddBGP(investigationID, resource, overview, security, occurredAt) as unknown as Promise<api.InvestigationAddResult>;
+  return goInvestigationAddBGP(investigationID, resource, api.BGPAddInput.createFrom(input), occurredAt) as unknown as Promise<api.InvestigationAddResult>;
 }
 
 // ---- Modo laboratorio (Fase 5, módulo 27) ----

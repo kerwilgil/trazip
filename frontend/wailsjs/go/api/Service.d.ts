@@ -123,7 +123,7 @@ export function IPCalcSplit(arg1:string,arg2:number):Promise<ipcalc.SplitResult>
 
 export function IPCalcVLSM(arg1:string,arg2:Array<ipcalc.VLSMRequest>):Promise<ipcalc.VLSMResult>;
 
-export function InvestigationAddBGP(arg1:string,arg2:string,arg3:bgp.Overview,arg4:bgp.SecurityResult,arg5:string):Promise<api.InvestigationAddResult>;
+export function InvestigationAddBGP(arg1:string,arg2:string,arg3:api.BGPAddInput,arg4:string):Promise<api.InvestigationAddResult>;
 
 export function InvestigationAddDiagnose(arg1:string,arg2:string):Promise<api.InvestigationAddResult>;
 

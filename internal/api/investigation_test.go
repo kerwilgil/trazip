@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"trazip/internal/bgp"
 	"trazip/internal/correlation"
 	"trazip/internal/diagnosis"
 	"trazip/internal/investigation"
@@ -591,5 +592,215 @@ func TestInvestigationEnrich_StoredInvestigationUnchanged(t *testing.T) {
 	}
 	if after.UpdatedAt != before.UpdatedAt {
 		t.Errorf("UpdatedAt changed from %q to %q — enrichment should not mutate stored investigation", before.UpdatedAt, after.UpdatedAt)
+	}
+}
+
+// ============================================================
+// BGP Intelligence Integration (V1.5-5) — Tests
+// ============================================================
+
+// makeOverview returns a minimal bgp.Overview for testing.
+func makeOverview() *bgp.Overview {
+	return &bgp.Overview{
+		Resource: "AS13335",
+		Holder:   "Cloudflare, Inc.",
+		Prefixes: []string{"1.1.1.0/24", "2606:4700::/32"},
+	}
+}
+
+// makeSecurityRisk returns a bgp.SecurityResult with HealthRisk.
+func makeSecurityRisk() *bgp.SecurityResult {
+	return &bgp.SecurityResult{
+		Health: bgp.HealthResult{State: bgp.HealthRisk, DataSufficient: true},
+		RPKI:   bgp.RPKISummary{States: map[bgp.RPKIState]int{bgp.RPKIInvalidASN: 1}},
+	}
+}
+
+// makeSecurityAttention returns a bgp.SecurityResult with HealthAttention.
+func makeSecurityAttention() *bgp.SecurityResult {
+	return &bgp.SecurityResult{
+		Health: bgp.HealthResult{State: bgp.HealthAttention, DataSufficient: true},
+	}
+}
+
+// TestInvestigationAddBGP_OverviewOnly stores BGP overview without security.
+func TestInvestigationAddBGP_OverviewOnly(t *testing.T) {
+	s := newTestServiceWithInvestigations(t)
+	inv, _ := s.InvestigationCreate("bgp-overview-only", "")
+
+	res, err := s.InvestigationAddBGP(inv.ID, "AS13335", BGPAddInput{Overview: makeOverview()}, "2026-01-01T09:00:00Z")
+	if err != nil {
+		t.Fatalf("InvestigationAddBGP: %v", err)
+	}
+	if res.Existing {
+		t.Error("expected Existing=false for a fresh add")
+	}
+
+	entry := res.Entry
+	if entry.Snapshot.Kind != correlation.SourceBGPIntelligence {
+		t.Errorf("Snapshot.Kind = %q, want %q", entry.Snapshot.Kind, correlation.SourceBGPIntelligence)
+	}
+	if entry.Snapshot.Subject != "AS13335" {
+		t.Errorf("Snapshot.Subject = %q, want AS13335", entry.Snapshot.Subject)
+	}
+	if entry.Snapshot.OccurredAt != "2026-01-01T09:00:00Z" {
+		t.Errorf("Snapshot.OccurredAt = %q, want 2026-01-01T09:00:00Z", entry.Snapshot.OccurredAt)
+	}
+	// Evidence from overview should be present
+	hasAnnounced := false
+	for _, ev := range entry.Snapshot.Assessment.Evidence {
+		if ev.Type == "bgp_announced" && ev.Value == "AS13335" {
+			hasAnnounced = true
+			break
+		}
+	}
+	if !hasAnnounced {
+		t.Errorf("expected bgp_announced evidence from overview, got: %+v", entry.Snapshot.Assessment.Evidence)
+	}
+	// No RPKI evidence expected
+	for _, ev := range entry.Snapshot.Assessment.Evidence {
+		if ev.Type == "bgp_rpki" {
+			t.Errorf("unexpected bgp_rpki evidence when security=nil: %+v", ev)
+		}
+	}
+}
+
+// TestInvestigationAddBGP_SecurityOnly stores BGP security without overview.
+func TestInvestigationAddBGP_SecurityOnly(t *testing.T) {
+	s := newTestServiceWithInvestigations(t)
+	inv, _ := s.InvestigationCreate("bgp-security-only", "")
+
+	res, err := s.InvestigationAddBGP(inv.ID, "AS13335", BGPAddInput{Security: makeSecurityRisk()}, "2026-01-01T10:00:00Z")
+	if err != nil {
+		t.Fatalf("InvestigationAddBGP: %v", err)
+	}
+
+	entry := res.Entry
+	if entry.Snapshot.Subject != "AS13335" {
+		t.Errorf("Snapshot.Subject = %q, want AS13335", entry.Snapshot.Subject)
+	}
+	if entry.Snapshot.OccurredAt != "2026-01-01T10:00:00Z" {
+		t.Errorf("Snapshot.OccurredAt = %q, want 2026-01-01T10:00:00Z", entry.Snapshot.OccurredAt)
+	}
+	// RPKI evidence should be present
+	hasInvalid := false
+	for _, ev := range entry.Snapshot.Assessment.Evidence {
+		if ev.Type == "bgp_rpki" && strings.Contains(ev.Value, "invalid") {
+			hasInvalid = true
+			break
+		}
+	}
+	if !hasInvalid {
+		t.Errorf("expected bgp_rpki invalid evidence from security, got: %+v", entry.Snapshot.Assessment.Evidence)
+	}
+}
+
+// TestInvestigationAddBGP_OverviewAndSecurity stores both overview and security.
+func TestInvestigationAddBGP_OverviewAndSecurity(t *testing.T) {
+	s := newTestServiceWithInvestigations(t)
+	inv, _ := s.InvestigationCreate("bgp-both", "")
+
+	res, err := s.InvestigationAddBGP(inv.ID, "AS13335", BGPAddInput{Overview: makeOverview(), Security: makeSecurityRisk()}, "2026-01-01T11:00:00Z")
+	if err != nil {
+		t.Fatalf("InvestigationAddBGP: %v", err)
+	}
+
+	entry := res.Entry
+	if entry.Snapshot.OccurredAt != "2026-01-01T11:00:00Z" {
+		t.Errorf("Snapshot.OccurredAt = %q, want 2026-01-01T11:00:00Z", entry.Snapshot.OccurredAt)
+	}
+	// Both overview and security evidence should be present
+	hasAnnounced := false
+	hasRPKI := false
+	for _, ev := range entry.Snapshot.Assessment.Evidence {
+		if ev.Type == "bgp_announced" && ev.Value == "AS13335" {
+			hasAnnounced = true
+		}
+		if ev.Type == "bgp_rpki" && strings.Contains(ev.Value, "invalid") {
+			hasRPKI = true
+		}
+	}
+	if !hasAnnounced {
+		t.Error("expected bgp_announced evidence from overview")
+	}
+	if !hasRPKI {
+		t.Error("expected bgp_rpki invalid evidence from security")
+	}
+}
+
+// TestInvestigationAddBGP_HealthAttentionDoesNotAutoElevate verifies
+// that HealthAttention stays at LevelInfo (P1-03 semantics).
+func TestInvestigationAddBGP_HealthAttentionDoesNotAutoElevate(t *testing.T) {
+	s := newTestServiceWithInvestigations(t)
+	inv, _ := s.InvestigationCreate("bgp-attention", "")
+
+	res, err := s.InvestigationAddBGP(inv.ID, "AS13335", BGPAddInput{Overview: makeOverview(), Security: makeSecurityAttention()}, "2026-01-01T12:00:00Z")
+	if err != nil {
+		t.Fatalf("InvestigationAddBGP: %v", err)
+	}
+
+	entry := res.Entry
+	if entry.Snapshot.Assessment.Level != model.LevelInfo {
+		t.Errorf("HealthAttention should stay LevelInfo, got %v", entry.Snapshot.Assessment.Level)
+	}
+	if entry.Snapshot.Assessment.Confidence != 70 {
+		t.Errorf("HealthAttention confidence should be 70, got %v", entry.Snapshot.Assessment.Confidence)
+	}
+}
+
+// TestInvestigationAddBGP_OccurredAtPreserved verifies the exact occurredAt
+// value reaches the stored Snapshot.
+func TestInvestigationAddBGP_OccurredAtPreserved(t *testing.T) {
+	s := newTestServiceWithInvestigations(t)
+	inv, _ := s.InvestigationCreate("bgp-occurredat", "")
+
+	customTime := "2026-07-15T14:30:45Z"
+	res, err := s.InvestigationAddBGP(inv.ID, "AS13335", BGPAddInput{Overview: makeOverview()}, customTime)
+	if err != nil {
+		t.Fatalf("InvestigationAddBGP: %v", err)
+	}
+
+	if res.Entry.Snapshot.OccurredAt != customTime {
+		t.Errorf("OccurredAt = %q, want %q", res.Entry.Snapshot.OccurredAt, customTime)
+	}
+}
+
+// TestInvestigationAddBGP_BothNilReturnsControlledError verifies that
+// providing both overview=nil and security=nil returns a controlled error.
+func TestInvestigationAddBGP_BothNilReturnsControlledError(t *testing.T) {
+	s := newTestServiceWithInvestigations(t)
+	inv, _ := s.InvestigationCreate("bgp-both-nil", "")
+
+	_, err := s.InvestigationAddBGP(inv.ID, "AS13335", BGPAddInput{}, "2026-01-01T09:00:00Z")
+	if err == nil {
+		t.Fatal("expected an error when both overview and security are nil")
+	}
+	if !strings.Contains(err.Error(), "overview and security are both nil") {
+		t.Errorf("error message = %q, want to contain 'overview and security are both nil'", err.Error())
+	}
+
+	// No entry should have been written
+	got, _ := s.InvestigationGet(inv.ID)
+	if len(got.Entries) != 0 {
+		t.Errorf("Entries = %d, want 0 after rejected BGP add", len(got.Entries))
+	}
+}
+
+// TestInvestigationAddBGP_EmptyResourceReturnsError verifies resource validation.
+func TestInvestigationAddBGP_EmptyResourceReturnsError(t *testing.T) {
+	s := newTestServiceWithInvestigations(t)
+	inv, _ := s.InvestigationCreate("bgp-empty-resource", "")
+
+	_, err := s.InvestigationAddBGP(inv.ID, "", BGPAddInput{Overview: makeOverview()}, "2026-01-01T09:00:00Z")
+	if err == nil {
+		t.Fatal("expected an error for empty resource")
+	}
+	if !strings.Contains(err.Error(), "missing resource") {
+		t.Errorf("error message = %q, want to contain 'missing resource'", err.Error())
+	}
+
+	got, _ := s.InvestigationGet(inv.ID)
+	if len(got.Entries) != 0 {
+		t.Errorf("Entries = %d, want 0 after rejected BGP add", len(got.Entries))
 	}
 }

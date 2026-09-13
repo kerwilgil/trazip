@@ -210,11 +210,26 @@ func (s *Service) InvestigationAddWebIntel(investigationID string, res webintel.
 	return addResult(s.investigations.AddSnapshot(investigationID, snap))
 }
 
+// BGPAddInput wraps optional BGP overview and security results for a single
+// InvestigationAddBGP call. Using a struct with pointer fields allows Wails
+// to generate a TypeScript binding with optional properties instead of
+// required non-null struct parameters.
+type BGPAddInput struct {
+	Overview *bgp.Overview        `json:"overview,omitempty"`
+	Security *bgp.SecurityResult  `json:"security,omitempty"`
+}
+
 // InvestigationAddBGP persists a completed BGP Intelligence result —
 // it never runs BGP Intelligence again. It stores the result as a Snapshot
 // for later enrichment. NO network calls are made.
-func (s *Service) InvestigationAddBGP(investigationID string, resource string, overview *bgp.Overview, security *bgp.SecurityResult, occurredAt string) (InvestigationAddResult, error) {
-	snap, err := investigation.ToSnapshotBGP(resource, overview, nil, "")
+func (s *Service) InvestigationAddBGP(investigationID string, resource string, input BGPAddInput, occurredAt string) (InvestigationAddResult, error) {
+	if resource == "" {
+		return InvestigationAddResult{}, fmt.Errorf("bgp: missing resource")
+	}
+	if input.Overview == nil && input.Security == nil {
+		return InvestigationAddResult{}, fmt.Errorf("bgp: overview and security are both nil; provide at least one")
+	}
+	snap, err := investigation.ToSnapshotBGP(resource, input.Overview, input.Security, occurredAt)
 	if err != nil {
 		return InvestigationAddResult{}, fmt.Errorf("bgp: %w", err)
 	}

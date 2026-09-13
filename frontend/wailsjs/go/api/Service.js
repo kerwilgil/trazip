@@ -190,8 +190,8 @@ export function IPCalcVLSM(arg1, arg2) {
   return window['go']['api']['Service']['IPCalcVLSM'](arg1, arg2);
 }
 
-export function InvestigationAddBGP(arg1, arg2, arg3, arg4, arg5) {
-  return window['go']['api']['Service']['InvestigationAddBGP'](arg1, arg2, arg3, arg4, arg5);
+export function InvestigationAddBGP(arg1, arg2, arg3, arg4) {
+  return window['go']['api']['Service']['InvestigationAddBGP'](arg1, arg2, arg3, arg4);
 }
 
 export function InvestigationAddDiagnose(arg1, arg2) {
