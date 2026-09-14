@@ -249,11 +249,11 @@ export default function Scanner() {
             </p>
           )}
           <div className="list-reset">
-            {exposure && exposure.unexpected.length > 0 && (
-              <div className="kv"><span className="k">{t('Inesperados')}</span><span className="v mono">{exposure.unexpected.join(', ')}</span></div>
+            {exposure && (exposure.unexpected ?? []).length > 0 && (
+              <div className="kv"><span className="k">{t('Inesperados')}</span><span className="v mono">{(exposure.unexpected ?? []).join(', ')}</span></div>
             )}
-            {exposure && exposure.missing.length > 0 && (
-              <div className="kv"><span className="k">{t('Esperados no observados')}</span><span className="v mono">{exposure.missing.join(', ')}</span></div>
+            {exposure && (exposure.missing ?? []).length > 0 && (
+              <div className="kv"><span className="k">{t('Esperados no observados')}</span><span className="v mono">{(exposure.missing ?? []).join(', ')}</span></div>
             )}
             {drift && (
               <div className="kv"><span className="k">{t('Nuevos abiertos')}</span><span className="v mono">{drift.newlyOpen.join(', ') || t('ninguno')}</span></div>
