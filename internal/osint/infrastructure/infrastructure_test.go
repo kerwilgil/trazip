@@ -681,7 +681,7 @@ func TestOSMProvenance(t *testing.T) {
 			Source:      "Internet Infrastructure Intelligence",
 			QueriedAt:   time.Now().UTC().Format(time.RFC3339),
 			DataSent:    "osm:node/12345",
-			CachePolicy: "memory (TTL)",
+			CachePolicy: "none",
 			Confidence:  "alta",
 			RateLimit:   "OSM: 1 req/s (TRAZIP conservative); PeeringDB: 0.5 req/s (TRAZIP conservative)",
 		},
@@ -766,7 +766,7 @@ func TestDisclosure(t *testing.T) {
 			Source:      "Internet Infrastructure Intelligence",
 			QueriedAt:   time.Now().UTC().Format(time.RFC3339),
 			DataSent:    "test",
-			CachePolicy: "memory (TTL)",
+			CachePolicy: "none",
 			Confidence:  "alta",
 			RateLimit:   "OSM: 1 req/s (TRAZIP conservative); PeeringDB: 0.5 req/s (TRAZIP conservative)",
 		},
@@ -1059,7 +1059,7 @@ func TestASNToFacilityExplicitCorrelation(t *testing.T) {
 		Confidence:      "alta",
 	}
 
-	corr, err := ConvertPeeringDBNetFac(&pdbNetFac, "peeringdb:fac:789", prov)
+	corr, err := ConvertPeeringDBNetFac(&pdbNetFac, "peeringdb:fac:789", 12345, prov)
 	if err != nil {
 		t.Fatalf("ConvertPeeringDBNetFac failed: %v", err)
 	}
@@ -1241,7 +1241,7 @@ func TestNonNilArrays(t *testing.T) {
 	}
 
 	// Check all array fields are non-nil (empty arrays, not null)
-	arrayFields := []string{"ixps", "facilities", "landing_stations", "submarine_cables", "correlations", "provenance"}
+	arrayFields := []string{"ixps", "facilities", "landingStations", "submarineCables", "correlations", "provenance"}
 	for _, field := range arrayFields {
 		val, ok := result[field]
 		if !ok {

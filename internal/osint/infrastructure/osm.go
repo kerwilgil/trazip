@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"trazip/internal/osint"
@@ -25,10 +24,8 @@ const (
 type OSMClient struct {
 	httpClient *http.Client
 	baseURL    string
-	rateLimit  float64 // requests per second
+	rateLimiter *RateLimiter
 	userAgent  string
-	lastReq    time.Time
-	mu         sync.Mutex
 }
 
 // OSMConfig configures the OSM client.
@@ -61,11 +58,10 @@ func NewOSMClient(cfg OSMConfig) *OSMClient {
 		cfg.UserAgent = "TRAZIP/1.0"
 	}
 	return &OSMClient{
-		httpClient: &http.Client{Timeout: cfg.Timeout},
-		baseURL:    cfg.BaseURL,
-		rateLimit:  cfg.RateLimit,
-		userAgent:  cfg.UserAgent,
-		lastReq:    time.Time{},
+		httpClient:  &http.Client{Timeout: cfg.Timeout},
+		baseURL:     cfg.BaseURL,
+		rateLimiter: NewRateLimiter(cfg.RateLimit),
+		userAgent:   cfg.UserAgent,
 	}
 }
 
@@ -123,31 +119,9 @@ type OverpassCenter struct {
 // QueryOSM executes an Overpass QL query and returns parsed elements.
 // The query must be a valid Overpass QL string.
 func (c *OSMClient) QueryOSM(ctx context.Context, overpassQL string) (*OverpassResponse, error) {
-	// Rate limiting with proper locking and no timer leaks
-	if c.rateLimit > 0 {
-		c.mu.Lock()
-		elapsed := time.Since(c.lastReq)
-		minInterval := time.Duration(float64(time.Second) / c.rateLimit)
-		if elapsed < minInterval {
-			wait := minInterval - elapsed
-			c.mu.Unlock()
-			timer := time.NewTimer(wait)
-			select {
-			case <-timer.C:
-			case <-ctx.Done():
-				if !timer.Stop() {
-					<-timer.C
-				}
-				return nil, ctx.Err()
-			}
-			c.mu.Lock()
-		}
-		c.lastReq = time.Now()
-		c.mu.Unlock()
-	} else {
-		c.mu.Lock()
-		c.lastReq = time.Now()
-		c.mu.Unlock()
+	// Rate limiting with proper serializing rate limiter
+	if err := c.rateLimiter.Wait(ctx); err != nil {
+		return nil, err
 	}
 
 	// Build request

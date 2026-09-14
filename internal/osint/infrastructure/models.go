@@ -44,11 +44,11 @@ type IXP struct {
 	Latitude        float64            `json:"latitude,omitempty"`
 	Longitude       float64            `json:"longitude,omitempty"`
 	Website         string             `json:"website,omitempty"`
-	PeeringDBID     int                `json:"peeringdb_id,omitempty"`
-	OSMID           string             `json:"osm_id,omitempty"`   // OSM node/way/relation ID
-	PeeringLANs     []IXPLAN           `json:"peering_lans,omitempty"`
+	PeeringDBID     int                `json:"peeringdbId,omitempty"`
+	OSMID           string             `json:"osmId,omitempty"`   // OSM node/way/relation ID
+	PeeringLANs     []IXPLAN           `json:"peeringLans,omitempty"`
 	Provenance      osint.Provenance   `json:"provenance"`
-	LastUpdated     string             `json:"last_updated"`       // RFC3339
+	LastUpdated     string             `json:"lastUpdated"`       // RFC3339
 	Notes           string             `json:"notes,omitempty"`
 }
 
@@ -58,8 +58,8 @@ type IXPLAN struct {
 	Name          string   `json:"name"`            // e.g., "AMS-IX IPv4"
 	VLAN          int      `json:"vlan,omitempty"`  // VLAN ID
 	MTU           int      `json:"mtu,omitempty"`   // MTU
-	IPv4Prefix    string   `json:"ipv4_prefix,omitempty"`
-	IPv6Prefix    string   `json:"ipv6_prefix,omitempty"`
+	IPv4Prefix    string   `json:"ipv4Prefix,omitempty"`
+	IPv6Prefix    string   `json:"ipv6Prefix,omitempty"`
 	Speed         int      `json:"speed,omitempty"` // Speed in Mbps
 	Operational   bool     `json:"operational"`
 	Members       []string `json:"members,omitempty"` // ASNs present on this LAN
@@ -93,7 +93,7 @@ func (i IXP) Validate() error {
 type Facility struct {
 	ID            string           `json:"id"`
 	Name          string           `json:"name"`           // e.g., "Equinix AM5"
-	OrgName       string           `json:"org_name,omitempty"` // e.g., "Equinix"
+	OrgName       string           `json:"orgName,omitempty"` // e.g., "Equinix"
 	City          string           `json:"city"`
 	Country       string           `json:"country"`        // ISO alpha-2
 	Region        string           `json:"region,omitempty"`
@@ -101,12 +101,12 @@ type Facility struct {
 	Latitude      float64          `json:"latitude,omitempty"`
 	Longitude     float64          `json:"longitude,omitempty"`
 	CLLI          string           `json:"clli,omitempty"` // CLLI code if available
-	PeeringDBID   int              `json:"peeringdb_id,omitempty"`
-	OSMID         string           `json:"osm_id,omitempty"`
+	PeeringDBID   int              `json:"peeringdbId,omitempty"`
+	OSMID         string           `json:"osmId,omitempty"`
 	Website       string           `json:"website,omitempty"`
 	IXPs          []string         `json:"ixps,omitempty"` // IXP IDs present at this facility
 	Provenance    osint.Provenance `json:"provenance"`
-	LastUpdated   string           `json:"last_updated"`
+	LastUpdated   string           `json:"lastUpdated"`
 	Notes         string           `json:"notes,omitempty"`
 }
 
@@ -143,14 +143,14 @@ type LandingStation struct {
 	Region          string             `json:"region,omitempty"`
 	Latitude        float64            `json:"latitude,omitempty"`
 	Longitude       float64            `json:"longitude,omitempty"`
-	FacilityName    string             `json:"facility_name,omitempty"` // Associated facility name
-	FacilityID      string             `json:"facility_id,omitempty"`   // Link to Facility if available
+	FacilityName    string             `json:"facilityName,omitempty"` // Associated facility name
+	FacilityID      string             `json:"facilityId,omitempty"`   // Link to Facility if available
 	Cables          []string           `json:"cables,omitempty"`        // Submarine cable IDs/names landing here
-	PeeringDBID     int                `json:"peeringdb_id,omitempty"`
-	OSMID           string             `json:"osm_id,omitempty"`        // OSM node/way/relation ID
+	PeeringDBID     int                `json:"peeringdbId,omitempty"`
+	OSMID           string             `json:"osmId,omitempty"`        // OSM node/way/relation ID
 	Website         string             `json:"website,omitempty"`
 	Provenance      osint.Provenance   `json:"provenance"`
-	LastUpdated     string             `json:"last_updated"`
+	LastUpdated     string             `json:"lastUpdated"`
 	Notes           string             `json:"notes,omitempty"`
 }
 
@@ -181,15 +181,15 @@ type SubmarineCable struct {
 	ID              string               `json:"id"`                // e.g., "osm:way/123", "telegeography:ACE"
 	Name            string               `json:"name"`              // e.g., "ACE", "SEA-ME-WE 5"
 	Owners          []string             `json:"owners,omitempty"`  // Consortium members
-	LandingPoints   []string             `json:"landing_points,omitempty"` // Landing station IDs/names
-	ReadyForService string               `json:"rfs,omitempty"`     // RFS date if known
-	LengthKm        float64              `json:"length_km,omitempty"`
-	FiberPairs      int                  `json:"fiber_pairs,omitempty"`
-	DesignCapacity  string               `json:"design_capacity,omitempty"` // e.g., "100 Tbps"
-	OSMIDs          []string             `json:"osm_ids,omitempty"` // OSM way/relation IDs
-	WikipediaURL    string               `json:"wikipedia_url,omitempty"`
+	LandingPoints   []string             `json:"landingPoints,omitempty"` // Landing station IDs/names
+	ReadyForService string               `json:"readyForService,omitempty"`     // RFS date if known
+	LengthKm        float64              `json:"lengthKm,omitempty"`
+	FiberPairs      int                  `json:"fiberPairs,omitempty"`
+	DesignCapacity  string               `json:"designCapacity,omitempty"` // e.g., "100 Tbps"
+	OSMIDs          []string             `json:"osmIds,omitempty"` // OSM way/relation IDs
+	WikipediaURL    string               `json:"wikipediaUrl,omitempty"`
 	Provenance      osint.Provenance     `json:"provenance"`
-	LastUpdated     string               `json:"last_updated"`
+	LastUpdated     string               `json:"lastUpdated"`
 	Notes           string               `json:"notes,omitempty"`
 }
 
@@ -213,14 +213,14 @@ func (s SubmarineCable) Validate() error {
 // EvidenceClass MUST be set explicitly — NO automatic promotion.
 type InfrastructureCorrelation struct {
 	ID             string             `json:"id"`
-	NetworkEntity  string             `json:"network_entity"`   // ASN, Prefix, IP
-	InfraEntity    string             `json:"infra_entity"`     // IXP, Facility, LandingStation, SubmarineCable ID
-	RelationKind   string             `json:"relation_kind"`    // e.g., "asn_at_ixp", "asn_at_facility", "prefix_lands_at"
-	EvidenceClass  osint.EvidenceClass `json:"evidence_class"`   // MUST be explicit
-	ProvenanceRef  string             `json:"provenance_ref"`   // osint.Provenance ID or source reference
+	NetworkEntity  string             `json:"networkEntity"`   // ASN, Prefix, IP
+	InfraEntity    string             `json:"infraEntity"`     // IXP, Facility, LandingStation, SubmarineCable ID
+	RelationKind   string             `json:"relationKind"`    // e.g., "asn_at_ixp", "asn_at_facility", "prefix_lands_at"
+	EvidenceClass  osint.EvidenceClass `json:"evidenceClass"`   // MUST be explicit
+	ProvenanceRef  string             `json:"provenanceRef"`   // osint.Provenance ID or source reference
 	Label          string             `json:"label,omitempty"`  // Human-readable description
 	Confidence     string             `json:"confidence,omitempty"` // "alta" | "media" | "baja"
-	RetrievedAt    string             `json:"retrieved_at"`     // RFC3339
+	RetrievedAt    string             `json:"retrievedAt"`     // RFC3339
 }
 
 // Validate checks that the correlation is well-formed.
@@ -255,22 +255,22 @@ func (c InfrastructureCorrelation) Validate() error {
 type InfrastructureCollection struct {
 	IXPs              []IXP                    `json:"ixps"`
 	Facilities        []Facility             `json:"facilities"`
-	LandingStations   []LandingStation       `json:"landing_stations"`
-	SubmarineCables   []SubmarineCable       `json:"submarine_cables"`
+	LandingStations   []LandingStation       `json:"landingStations"`
+	SubmarineCables   []SubmarineCable       `json:"submarineCables"`
 	Correlations      []InfrastructureCorrelation `json:"correlations"`
 	Provenance        []osint.Provenance     `json:"provenance"`
-	RetrievedAt       string                 `json:"retrieved_at"` // RFC3339
+	RetrievedAt       string                 `json:"retrievedAt"` // RFC3339
 	Query             string                 `json:"query"`        // Original query/input
 	Bounds            InfraBounds            `json:"bounds"`
 }
 
 // InfraBounds enforces collection bounds.
 type InfraBounds struct {
-	MaxIXPs            int `json:"max_ixps"`
-	MaxFacilities      int `json:"max_facilities"`
-	MaxLandingStations int `json:"max_landing_stations"`
-	MaxSubmarineCables int `json:"max_submarine_cables"`
-	MaxCorrelations    int `json:"max_correlations"`
+	MaxIXPs            int `json:"maxIxps"`
+	MaxFacilities      int `json:"maxFacilities"`
+	MaxLandingStations int `json:"maxLandingStations"`
+	MaxSubmarineCables int `json:"maxSubmarineCables"`
+	MaxCorrelations    int `json:"maxCorrelations"`
 }
 
 // DefaultInfraBounds returns sensible defaults for collection bounds.

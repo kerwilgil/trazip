@@ -4,6 +4,7 @@
 package osint
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"trazip/internal/intel/external"
@@ -322,6 +323,12 @@ func (e EvidenceClass) String() string {
 	default:
 		return "unknown"
 	}
+}
+
+// MarshalJSON implements json.Marshaler for EvidenceClass.
+// Serializes as string ("observed", "possible_context", "not_proven") instead of int.
+func (e EvidenceClass) MarshalJSON() ([]byte, error) {
+	return json.Marshal(e.String())
 }
 
 // IsValid reports whether the evidence class is a canonical valid class.

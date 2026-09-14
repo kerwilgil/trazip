@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"sync"
 	"time"
 
 	"trazip/internal/intel/external"
@@ -26,13 +25,11 @@ const (
 // All requests are bounded, timeout-controlled, and cancellable.
 // Respects PeeringDB AUP: no bulk redistribution, no contact harvesting.
 type PeeringDBClient struct {
-	httpClient *http.Client
-	baseURL    string
-	apiKey     string // optional, for authenticated requests
-	rateLimit  float64
-	userAgent  string
-	lastReq    time.Time
-	mu         sync.Mutex
+	httpClient   *http.Client
+	baseURL      string
+	apiKey       string // optional, for authenticated requests
+	rateLimiter  *RateLimiter
+	userAgent    string
 }
 
 // PeeringDBConfig configures the PeeringDB client.
@@ -67,12 +64,11 @@ func NewPeeringDBClient(cfg PeeringDBConfig) *PeeringDBClient {
 		cfg.UserAgent = "TRAZIP/1.0"
 	}
 	return &PeeringDBClient{
-		httpClient: &http.Client{Timeout: cfg.Timeout},
-		baseURL:    cfg.BaseURL,
-		apiKey:     cfg.APIKey,
-		rateLimit:  cfg.RateLimit,
-		userAgent:  cfg.UserAgent,
-		lastReq:    time.Time{},
+		httpClient:  &http.Client{Timeout: cfg.Timeout},
+		baseURL:     cfg.BaseURL,
+		apiKey:      cfg.APIKey,
+		rateLimiter: NewRateLimiter(cfg.RateLimit),
+		userAgent:   cfg.UserAgent,
 	}
 }
 
@@ -136,6 +132,7 @@ type PeeringDBFacility struct {
 
 // PeeringDBNet represents a network (ASN) from PeeringDB.
 type PeeringDBNet struct {
+	ID       int    `json:"id"`        // PeeringDB internal network ID (net_id)
 	ASN      int    `json:"asn"`
 	Name     string `json:"name"`
 	Website  string `json:"website"`
@@ -198,31 +195,9 @@ type PeeringDBNetFac struct {
 // path is the API endpoint (e.g., "/ix", "/fac", "/net").
 // params are query parameters (e.g., "id=123", "org_id=456").
 func (c *PeeringDBClient) QueryPeeringDB(ctx context.Context, path string, params url.Values) ([]byte, error) {
-	// Rate limiting with proper locking and no timer leaks
-	if c.rateLimit > 0 {
-		c.mu.Lock()
-		elapsed := time.Since(c.lastReq)
-		minInterval := time.Duration(float64(time.Second) / c.rateLimit)
-		if elapsed < minInterval {
-			wait := minInterval - elapsed
-			c.mu.Unlock()
-			timer := time.NewTimer(wait)
-			select {
-			case <-timer.C:
-			case <-ctx.Done():
-				if !timer.Stop() {
-					<-timer.C
-				}
-				return nil, ctx.Err()
-			}
-			c.mu.Lock()
-		}
-		c.lastReq = time.Now()
-		c.mu.Unlock()
-	} else {
-		c.mu.Lock()
-		c.lastReq = time.Now()
-		c.mu.Unlock()
+	// Rate limiting with proper serializing rate limiter
+	if err := c.rateLimiter.Wait(ctx); err != nil {
+		return nil, err
 	}
 
 	// Build URL with pagination limit
@@ -395,9 +370,27 @@ func (c *PeeringDBClient) ListNetworksAtIXP(ctx context.Context, ixpID int) ([]P
 	return netixlans, nil
 }
 
+// GetNetworkIDByASN resolves an ASN to its PeeringDB internal network ID (net_id).
+func (c *PeeringDBClient) GetNetworkIDByASN(ctx context.Context, asn int) (int, error) {
+	net, err := c.GetNetwork(ctx, asn)
+	if err != nil {
+		return 0, err
+	}
+	// The PeeringDB Net object doesn't expose net_id directly in the API response
+	// We need to query /net?asn=... which returns the net object with id field
+	// Actually, the GetNetwork already queries /net?asn=... and returns the net object
+	// The net_id is the same as the id field in the net object
+	return net.ID, nil
+}
+
 // ListFacilitiesByNetwork returns facility IDs where a network (ASN) is present.
+// First resolves ASN to net_id, then queries netfac endpoint.
 func (c *PeeringDBClient) ListFacilitiesByNetwork(ctx context.Context, asn int) ([]int, error) {
-	data, err := c.QueryPeeringDB(ctx, "/netfac", url.Values{"asn": {fmt.Sprintf("%d", asn)}})
+	netID, err := c.GetNetworkIDByASN(ctx, asn)
+	if err != nil {
+		return nil, fmt.Errorf("resolve ASN %d to net_id: %w", asn, err)
+	}
+	data, err := c.QueryPeeringDB(ctx, "/netfac", url.Values{"net_id": {fmt.Sprintf("%d", netID)}})
 	if err != nil {
 		return nil, err
 	}
@@ -410,6 +403,24 @@ func (c *PeeringDBClient) ListFacilitiesByNetwork(ctx context.Context, asn int) 
 		facIDs = append(facIDs, l.FacID)
 	}
 	return facIDs, nil
+}
+
+// GetNetFacByASN returns full netfac records for a given ASN.
+// This includes all fields needed to create proper correlations.
+func (c *PeeringDBClient) GetNetFacByASN(ctx context.Context, asn int) ([]PeeringDBNetFac, error) {
+	netID, err := c.GetNetworkIDByASN(ctx, asn)
+	if err != nil {
+		return nil, fmt.Errorf("resolve ASN %d to net_id: %w", asn, err)
+	}
+	data, err := c.QueryPeeringDB(ctx, "/netfac", url.Values{"net_id": {fmt.Sprintf("%d", netID)}})
+	if err != nil {
+		return nil, err
+	}
+	var links []PeeringDBNetFac
+	if err := json.Unmarshal(data, &links); err != nil {
+		return nil, fmt.Errorf("peeringdb: unmarshal netfac: %w", err)
+	}
+	return links, nil
 }
 
 // ConvertPeeringDBIXP converts a PeeringDB IXP to our internal IXP model.
@@ -445,7 +456,7 @@ func ConvertPeeringDBIXP(pdb *PeeringDBIXP, prov osint.Provenance) (IXP, error) 
 			Source:      "PeeringDB",
 			QueriedAt:   time.Now().UTC().Format(time.RFC3339),
 			DataSent:    fmt.Sprintf("https://peeringdb.com/api/ix?id=%d", pdb.ID),
-			CachePolicy: "memory (TTL)",
+			CachePolicy: "none",
 			Confidence:  "alta",
 			RateLimit:   "0.5 req/s (TRAZIP conservative)",
 		},
@@ -502,7 +513,7 @@ func ConvertPeeringDBFacility(pdb *PeeringDBFacility, prov osint.Provenance) (Fa
 			Source:      "PeeringDB",
 			QueriedAt:   time.Now().UTC().Format(time.RFC3339),
 			DataSent:    fmt.Sprintf("https://peeringdb.com/api/fac?id=%d", pdb.ID),
-			CachePolicy: "memory (TTL)",
+			CachePolicy: "none",
 			Confidence:  "alta",
 			RateLimit:   "0.5 req/s (TRAZIP conservative)",
 		},
@@ -556,15 +567,16 @@ func ConvertPeeringDBNetIXLAN(pdb *PeeringDBNetIXLAN, ixpID string, prov osint.P
 }
 
 // ConvertPeeringDBNetFac converts a PeeringDB NetFac to an InfrastructureCorrelation.
-func ConvertPeeringDBNetFac(pdb *PeeringDBNetFac, facID string, prov osint.Provenance) (InfrastructureCorrelation, error) {
+// Requires the actual ASN (not PeeringDB net_id) for the NetworkEntity field.
+func ConvertPeeringDBNetFac(pdb *PeeringDBNetFac, facID string, asn int, prov osint.Provenance) (InfrastructureCorrelation, error) {
 	corr := InfrastructureCorrelation{
 		ID:            fmt.Sprintf("peeringdb:netfac:%d", pdb.ID),
-		NetworkEntity: fmt.Sprintf("AS%d", pdb.NetID),
+		NetworkEntity: fmt.Sprintf("AS%d", asn),
 		InfraEntity:   facID,
 		RelationKind:  "asn_at_facility",
 		EvidenceClass: osint.EvidenceObserved, // PeeringDB explicitly lists presence
 		ProvenanceRef: fmt.Sprintf("peeringdb:netfac:%d", pdb.ID),
-		Label:         fmt.Sprintf("AS%d present at Facility (PeeringDB)", pdb.NetID),
+		Label:         fmt.Sprintf("AS%d present at Facility (PeeringDB)", asn),
 		Confidence:    "alta",
 		RetrievedAt:   time.Now().UTC().Format(time.RFC3339),
 	}

@@ -103,10 +103,8 @@ type Service struct {
 	investigations *investigation.Manager
 
 	// osintRegistry is the OSINT Intelligence foundation's provider registry
-	// (V1.5-2). V1.5-3 wires only its read-only metadata to the UI via
-	// ListOSINTProviders — no provider is registered yet, and the registry
-	// never hands out a runnable provider. Execution (Executor + ScopeGuard)
-	// is a later phase.
+	// (V1.5-2). V1.5-6 registers the infrastructure intelligence provider
+	// and exposes execution via ExecuteOSINT through the Executor.
 	osintRegistry *osint.Registry
 
 	// bgpRealtimeStart constructs (but never starts — see
