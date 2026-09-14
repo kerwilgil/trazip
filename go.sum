@@ -1,5 +1,5 @@
-codeberg.org/miekg/dns v0.6.84 h1:KdGkekztQgb/g+TE2NIj+JM1OrSmhelDzPP5XEPV7eY=
-codeberg.org/miekg/dns v0.6.84/go.mod h1:58Y3ZTg6Z5ZEm/ZAAwHehbZfrD4u5mE4RByHoPEMyKk=
+codeberg.org/miekg/dns v0.6.109 h1:B2lA6b6n/FuUTdECFU9HCunwxLRaR71d+UFV5EP44gg=
+codeberg.org/miekg/dns v0.6.109/go.mod h1:vbidSyLJl5JcDUL2LrXCUjRYSFa5tJweseQox0GOrTk=
 git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3 h1:N3IGoHHp9pb6mj1cbXbuaSXV/UMKwmbKLf53nQmtqMA=
 git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3/go.mod h1:QtOLZGz8olr4qH2vWK0QH0w0O4T9fEIjMuWpKUsH7nc=
 github.com/bep/debounce v1.2.1 h1:v67fRdBA9UQu2NhLFXrSg0Brw7CexQekrBwDMM8bzeY=
