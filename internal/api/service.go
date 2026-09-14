@@ -506,8 +506,6 @@ func (s *Service) WebIntelAnalyze(rawInput, resolverAddr string) webintel.Result
 // in the OSINT Registry, sorted by ID for a deterministic UI. It never returns
 // a runnable provider — the registry hands out ProviderMeta copies only, and
 // the only route to execution is the Executor + ScopeGuard (not exposed here).
-// V1.5-3 registers no real providers, so this returns an empty slice; the
-// empty result is a valid "no sources registered yet" state, not an error.
 // Always a non-nil slice so the frontend contract (an array, never null) holds.
 func (s *Service) ListOSINTProviders() []OSINTProviderInfo {
 	out := []OSINTProviderInfo{}
@@ -531,6 +529,45 @@ func (s *Service) ListOSINTProviders() []OSINTProviderInfo {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
+}
+
+// OSINTExecuteResult wraps the result of an OSINT execution for Wails serialization.
+type OSINTExecuteResult struct {
+	Data       any                 `json:"data"`
+	Provenance osint.Provenance    `json:"provenance"`
+	Err        string              `json:"err,omitempty"`
+}
+
+// ExecuteOSINT runs a passive OSINT provider through the Executor.
+// This is the only supported way to execute OSINT providers.
+// providerID must be a registered provider ID (e.g., "infra.intelligence").
+// capability must be one of the provider's declared capabilities.
+// input is the query input (string for infrastructure intelligence).
+func (s *Service) ExecuteOSINT(providerID, capability, input string) OSINTExecuteResult {
+	if s.osintRegistry == nil {
+		return OSINTExecuteResult{Err: "OSINT registry not initialized"}
+	}
+
+	executor := osint.NewExecutor(s.osintRegistry)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	var cap osint.Capability = osint.Capability(capability)
+	res := executor.ExecutePassive(ctx, providerID, cap, input)
+
+	if res.Err != nil {
+		return OSINTExecuteResult{Err: res.Err.Error()}
+	}
+
+	// Ensure non-nil arrays in response
+	if coll, ok := res.Data.(*infrastructure.InfrastructureCollection); ok {
+		coll.EnsureNonNil()
+	}
+
+	return OSINTExecuteResult{
+		Data:       res.Data,
+		Provenance: res.Provenance,
+	}
 }
 
 // PassiveOSINT keeps all enrichment offline unless external is explicitly

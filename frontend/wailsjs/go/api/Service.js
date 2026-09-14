@@ -146,6 +146,10 @@ export function EnrichNetDiag(arg1) {
   return window['go']['api']['Service']['EnrichNetDiag'](arg1);
 }
 
+export function ExecuteOSINT(arg1, arg2, arg3) {
+  return window['go']['api']['Service']['ExecuteOSINT'](arg1, arg2, arg3);
+}
+
 export function ExposureCompare(arg1, arg2) {
   return window['go']['api']['Service']['ExposureCompare'](arg1, arg2);
 }

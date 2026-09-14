@@ -24,6 +24,7 @@ import {
   LanTrustAssess as goLanTrustAssess,
   ExposureCompare as goExposureCompare,
   PassiveOSINT as goPassiveOSINT,
+  ExecuteOSINT as goExecuteOSINT,
   DNSResolvers as goDNSResolvers,
   DNSRecordTypes as goDNSRecordTypes,
   DNSQuery as goDNSQuery,
@@ -1471,6 +1472,21 @@ export interface OsintProviderInfo {
 export async function listOsintProviders(): Promise<OsintProviderInfo[]> {
   if (!hasRuntime()) return [];
   return goListOSINTProviders() as unknown as Promise<OsintProviderInfo[]>;
+}
+
+// ---- OSINT Intelligence Execution (V1.5-6) ----
+// ExecuteOSINT runs a passive OSINT provider through the Executor.
+// This is the only supported way to execute OSINT providers.
+
+export interface OSINTExecuteResult {
+  data: any;
+  provenance: any;
+  err?: string;
+}
+
+export async function executeOSINT(providerId: string, capability: string, input: string): Promise<OSINTExecuteResult> {
+  if (!hasRuntime()) return { data: null, provenance: null, err: 'Sin runtime Wails' };
+  return goExecuteOSINT(providerId, capability, input) as unknown as Promise<OSINTExecuteResult>;
 }
 
 export async function rdapLookupIP(ip: string): Promise<rdap.Result> {

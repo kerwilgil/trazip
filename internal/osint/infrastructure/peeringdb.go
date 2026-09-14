@@ -5,12 +5,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"sync"
 	"time"
 
+	"trazip/internal/intel/external"
 	"trazip/internal/osint"
+)
+
+const (
+	// maxPeeringDBResponseSize limits the HTTP response body size to 10MB
+	maxPeeringDBResponseSize = 10 * 1024 * 1024
+	// maxPageSize limits the number of results per page
+	maxPageSize = 1000
 )
 
 // PeeringDBClient queries PeeringDB API for IXP, facility, and network data.
@@ -21,6 +30,7 @@ type PeeringDBClient struct {
 	baseURL    string
 	apiKey     string // optional, for authenticated requests
 	rateLimit  float64
+	userAgent  string
 	lastReq    time.Time
 	mu         sync.Mutex
 }
@@ -35,7 +45,7 @@ type PeeringDBConfig struct {
 }
 
 // DefaultPeeringDBConfig returns a sensible default configuration.
-// Conservative rate limit per PeeringDB AUP.
+// Conservative rate limit - TRAZIP conservative policy.
 func DefaultPeeringDBConfig() PeeringDBConfig {
 	return PeeringDBConfig{
 		Timeout:   30 * time.Second,
@@ -61,6 +71,7 @@ func NewPeeringDBClient(cfg PeeringDBConfig) *PeeringDBClient {
 		baseURL:    cfg.BaseURL,
 		apiKey:     cfg.APIKey,
 		rateLimit:  cfg.RateLimit,
+		userAgent:  cfg.UserAgent,
 		lastReq:    time.Time{},
 	}
 }
@@ -167,13 +178,23 @@ type PeeringDBNetIXLAN struct {
 	Updated      string `json:"updated"`
 }
 
-// PeeringDBFacilityIX represents an IXP at a facility.
+// PeeringDBFacilityIX represents an IXP at a facility (ixfac endpoint).
 type PeeringDBFacilityIX struct {
 	FacilityID int `json:"fac_id"`
 	IXPID      int `json:"ix_id"`
 }
 
-// QueryPeeringDB executes a GET request to PeeringDB API.
+// PeeringDBNetFac represents a network's presence at a facility (netfac endpoint).
+type PeeringDBNetFac struct {
+	ID         int    `json:"id"`
+	NetID      int    `json:"net_id"`
+	FacID      int    `json:"fac_id"`
+	AVGbps     int    `json:"avg_bps,omitempty"`
+	Created    string `json:"created"`
+	Updated    string `json:"updated"`
+}
+
+// QueryPeeringDB executes a GET request to PeeringDB API with response size bounds.
 // path is the API endpoint (e.g., "/ix", "/fac", "/net").
 // params are query parameters (e.g., "id=123", "org_id=456").
 func (c *PeeringDBClient) QueryPeeringDB(ctx context.Context, path string, params url.Values) ([]byte, error) {
@@ -195,9 +216,6 @@ func (c *PeeringDBClient) QueryPeeringDB(ctx context.Context, path string, param
 				return nil, ctx.Err()
 			}
 			c.mu.Lock()
-		} else {
-			c.mu.Unlock()
-			c.mu.Lock()
 		}
 		c.lastReq = time.Now()
 		c.mu.Unlock()
@@ -207,7 +225,14 @@ func (c *PeeringDBClient) QueryPeeringDB(ctx context.Context, path string, param
 		c.mu.Unlock()
 	}
 
-	// Build URL
+	// Build URL with pagination limit
+	if !params.Has("limit") {
+		params.Set("limit", fmt.Sprintf("%d", maxPageSize))
+	}
+	if !params.Has("offset") {
+		params.Set("offset", "0")
+	}
+
 	u := c.baseURL + path
 	if len(params) > 0 {
 		u += "?" + params.Encode()
@@ -218,7 +243,7 @@ func (c *PeeringDBClient) QueryPeeringDB(ctx context.Context, path string, param
 		return nil, fmt.Errorf("peeringdb: build request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "TRAZIP/1.0")
+	req.Header.Set("User-Agent", c.userAgent)
 
 	if c.apiKey != "" {
 		req.Header.Set("Authorization", "Api-Key "+c.apiKey)
@@ -240,8 +265,23 @@ func (c *PeeringDBClient) QueryPeeringDB(ctx context.Context, path string, param
 		return nil, fmt.Errorf("peeringdb: HTTP %d", resp.StatusCode)
 	}
 
+	// Read response with size limit
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxPeeringDBResponseSize))
+	if err != nil {
+		return nil, fmt.Errorf("peeringdb: read response: %w", err)
+	}
+
+	// Check if response was truncated
+	if len(body) >= maxPeeringDBResponseSize {
+		// Try to read one more byte to confirm truncation
+		var buf [1]byte
+		if n, _ := resp.Body.Read(buf[:]); n > 0 {
+			return nil, fmt.Errorf("peeringdb: response exceeds maximum size of %d bytes", maxPeeringDBResponseSize)
+		}
+	}
+
 	var respData PeeringDBResponse
-	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
+	if err := json.Unmarshal(body, &respData); err != nil {
 		return nil, fmt.Errorf("peeringdb: decode response: %w", err)
 	}
 
@@ -312,15 +352,15 @@ func (c *PeeringDBClient) GetIXLAN(ctx context.Context, id int) (*PeeringDBIXLAN
 	return &ixlan[0], nil
 }
 
-// ListIXPsByFacility returns IXP IDs present at a facility.
+// ListIXPsByFacility returns IXP IDs present at a facility using ixfac endpoint.
 func (c *PeeringDBClient) ListIXPsByFacility(ctx context.Context, facilityID int) ([]int, error) {
-	data, err := c.QueryPeeringDB(ctx, "/fac_ix", url.Values{"fac_id": {fmt.Sprintf("%d", facilityID)}})
+	data, err := c.QueryPeeringDB(ctx, "/ixfac", url.Values{"fac_id": {fmt.Sprintf("%d", facilityID)}})
 	if err != nil {
 		return nil, err
 	}
 	var links []PeeringDBFacilityIX
 	if err := json.Unmarshal(data, &links); err != nil {
-		return nil, fmt.Errorf("peeringdb: unmarshal fac_ix: %w", err)
+		return nil, fmt.Errorf("peeringdb: unmarshal ixfac: %w", err)
 	}
 	ixpIDs := make([]int, 0, len(links))
 	for _, l := range links {
@@ -355,6 +395,23 @@ func (c *PeeringDBClient) ListNetworksAtIXP(ctx context.Context, ixpID int) ([]P
 	return netixlans, nil
 }
 
+// ListFacilitiesByNetwork returns facility IDs where a network (ASN) is present.
+func (c *PeeringDBClient) ListFacilitiesByNetwork(ctx context.Context, asn int) ([]int, error) {
+	data, err := c.QueryPeeringDB(ctx, "/netfac", url.Values{"asn": {fmt.Sprintf("%d", asn)}})
+	if err != nil {
+		return nil, err
+	}
+	var links []PeeringDBNetFac
+	if err := json.Unmarshal(data, &links); err != nil {
+		return nil, fmt.Errorf("peeringdb: unmarshal netfac: %w", err)
+	}
+	facIDs := make([]int, 0, len(links))
+	for _, l := range links {
+		facIDs = append(facIDs, l.FacID)
+	}
+	return facIDs, nil
+}
+
 // ConvertPeeringDBIXP converts a PeeringDB IXP to our internal IXP model.
 func ConvertPeeringDBIXP(pdb *PeeringDBIXP, prov osint.Provenance) (IXP, error) {
 	if pdb == nil {
@@ -374,6 +431,26 @@ func ConvertPeeringDBIXP(pdb *PeeringDBIXP, prov osint.Provenance) (IXP, error) 
 		country = "XX"
 	}
 
+	// Use PeeringDB-specific provenance
+	peeringDBProv := osint.Provenance{
+		ProviderID:      "peeringdb",
+		ProviderName:    "PeeringDB",
+		Capability:      "ixp",
+		ActivityClass:   osint.ActivityPassive,
+		DisclosureClass: osint.DisclosurePassive,
+		RetrievedAt:     time.Now().UTC().Format(time.RFC3339),
+		Endpoint:        fmt.Sprintf("https://peeringdb.com/api/ix?id=%d", pdb.ID),
+		Confidence:      "alta",
+		Disclosure: external.Disclosure{
+			Source:      "PeeringDB",
+			QueriedAt:   time.Now().UTC().Format(time.RFC3339),
+			DataSent:    fmt.Sprintf("https://peeringdb.com/api/ix?id=%d", pdb.ID),
+			CachePolicy: "memory (TTL)",
+			Confidence:  "alta",
+			RateLimit:   "0.5 req/s (TRAZIP conservative)",
+		},
+	}
+
 	ixp := IXP{
 		ID:          fmt.Sprintf("peeringdb:%d", pdb.ID),
 		Name:        pdb.Name,
@@ -382,16 +459,7 @@ func ConvertPeeringDBIXP(pdb *PeeringDBIXP, prov osint.Provenance) (IXP, error) 
 		Region:      pdb.Region,
 		Website:     pdb.Website,
 		PeeringDBID: pdb.ID,
-		Provenance:  osint.Provenance{
-			ProviderID:      "peeringdb",
-			ProviderName:    "PeeringDB",
-			Capability:      "ixp",
-			ActivityClass:   osint.ActivityPassive,
-			DisclosureClass: osint.DisclosurePassive,
-			RetrievedAt:     time.Now().UTC().Format(time.RFC3339),
-			Endpoint:        fmt.Sprintf("https://peeringdb.com/api/ix?id=%d", pdb.ID),
-			Confidence:      "alta",
-		},
+		Provenance:  peeringDBProv,
 		LastUpdated: time.Now().UTC().Format(time.RFC3339),
 		Notes:       pdb.Notes,
 	}
@@ -420,6 +488,26 @@ func ConvertPeeringDBFacility(pdb *PeeringDBFacility, prov osint.Provenance) (Fa
 		country = "XX"
 	}
 
+	// Use PeeringDB-specific provenance
+	peeringDBProv := osint.Provenance{
+		ProviderID:      "peeringdb",
+		ProviderName:    "PeeringDB",
+		Capability:      "facility",
+		ActivityClass:   osint.ActivityPassive,
+		DisclosureClass: osint.DisclosurePassive,
+		RetrievedAt:     time.Now().UTC().Format(time.RFC3339),
+		Endpoint:        fmt.Sprintf("https://peeringdb.com/api/fac?id=%d", pdb.ID),
+		Confidence:      "alta",
+		Disclosure: external.Disclosure{
+			Source:      "PeeringDB",
+			QueriedAt:   time.Now().UTC().Format(time.RFC3339),
+			DataSent:    fmt.Sprintf("https://peeringdb.com/api/fac?id=%d", pdb.ID),
+			CachePolicy: "memory (TTL)",
+			Confidence:  "alta",
+			RateLimit:   "0.5 req/s (TRAZIP conservative)",
+		},
+	}
+
 	fac := Facility{
 		ID:           fmt.Sprintf("peeringdb:%d", pdb.ID),
 		Name:         pdb.Name,
@@ -433,18 +521,9 @@ func ConvertPeeringDBFacility(pdb *PeeringDBFacility, prov osint.Provenance) (Fa
 		CLLI:         pdb.CLLI,
 		PeeringDBID:  pdb.ID,
 		Website:      pdb.Website,
-		Provenance: osint.Provenance{
-			ProviderID:      "peeringdb",
-			ProviderName:    "PeeringDB",
-			Capability:      "facility",
-			ActivityClass:   osint.ActivityPassive,
-			DisclosureClass: osint.DisclosurePassive,
-			RetrievedAt:     time.Now().UTC().Format(time.RFC3339),
-			Endpoint:        fmt.Sprintf("https://peeringdb.com/api/fac?id=%d", pdb.ID),
-			Confidence:      "alta",
-		},
-		LastUpdated: time.Now().UTC().Format(time.RFC3339),
-		Notes:       pdb.Notes,
+		Provenance:   peeringDBProv,
+		LastUpdated:  time.Now().UTC().Format(time.RFC3339),
+		Notes:        pdb.Notes,
 	}
 
 	if pdb.Suite != "" {
@@ -470,6 +549,22 @@ func ConvertPeeringDBNetIXLAN(pdb *PeeringDBNetIXLAN, ixpID string, prov osint.P
 		EvidenceClass: osint.EvidenceObserved, // PeeringDB explicitly lists presence
 		ProvenanceRef: fmt.Sprintf("peeringdb:netixlan:%d", pdb.ID),
 		Label:         fmt.Sprintf("AS%d present at IXP (PeeringDB)", pdb.ASN),
+		Confidence:    "alta",
+		RetrievedAt:   time.Now().UTC().Format(time.RFC3339),
+	}
+	return corr, nil
+}
+
+// ConvertPeeringDBNetFac converts a PeeringDB NetFac to an InfrastructureCorrelation.
+func ConvertPeeringDBNetFac(pdb *PeeringDBNetFac, facID string, prov osint.Provenance) (InfrastructureCorrelation, error) {
+	corr := InfrastructureCorrelation{
+		ID:            fmt.Sprintf("peeringdb:netfac:%d", pdb.ID),
+		NetworkEntity: fmt.Sprintf("AS%d", pdb.NetID),
+		InfraEntity:   facID,
+		RelationKind:  "asn_at_facility",
+		EvidenceClass: osint.EvidenceObserved, // PeeringDB explicitly lists presence
+		ProvenanceRef: fmt.Sprintf("peeringdb:netfac:%d", pdb.ID),
+		Label:         fmt.Sprintf("AS%d present at Facility (PeeringDB)", pdb.NetID),
 		Confidence:    "alta",
 		RetrievedAt:   time.Now().UTC().Format(time.RFC3339),
 	}

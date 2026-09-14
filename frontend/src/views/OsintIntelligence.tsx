@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { listOsintProviders } from '../lib/api';
+import { executeOSINT, listOsintProviders } from '../lib/api';
 import { useI18n } from '../lib/i18n';
 import {
   ACTIVITY_DESCRIPTORS,
@@ -40,15 +40,13 @@ import {
   EMPTY_SELECTION,
   DEFAULT_FILTERS,
 } from '../lib/entityGraph';
+import { asEvidenceClass, asEntityKind } from '../lib/entityGraph';
 
-// OSINT Intelligence workspace (V1.5-4).
+// OSINT Intelligence workspace (V1.5-6).
 //
 // This surface exposes the V1.5-2 OSINT foundation: it lists the providers in
-// the backend Registry with their real metadata, and lays out — but does not
-// run — the query, results and provenance areas. There are no real external
-// providers and no execution API yet; the empty Registry is the expected
-// state. Passive/active separation, capability gating and scope authorization
-// are enforced by the Go Executor + ScopeGuard, never by this view.
+// the backend Registry with their real metadata, and provides execution via
+// the Executor (ExecuteOSINT) for passive infrastructure intelligence.
 // Entity Graph (V1.5-4) visualizes explicit entity relationships — no inference.
 export default function OsintIntelligence() {
   const { t } = useI18n();
@@ -58,7 +56,13 @@ export default function OsintIntelligence() {
   const [providerId, setProviderId] = useState('');
   const [capability, setCapability] = useState('');
 
-  // Entity Graph state (V1.5-4) — empty in this version, no runtime data
+  // Execution state
+  const [execState, setExecState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [execError, setExecError] = useState<string>('');
+  const [execData, setExecData] = useState<any>(null);
+  const [execProvenance, setExecProvenance] = useState<any>(null);
+
+  // Entity Graph state (V1.5-4) — populated from infrastructure intelligence results
   const [graphZoom, setGraphZoom] = useState(1);
   const [graphViewBox, setGraphViewBox] = useState<EntityGraphViewBox>({
     x: 0,
@@ -99,22 +103,124 @@ export default function OsintIntelligence() {
     if (capability && !capabilityOptions.includes(capability)) setCapability('');
   }, [capability, capabilityOptions]);
 
-  // Empty entity graph in V1.5-4 — no runtime data yet
-  const emptyEntities: OsintEntity[] = [];
-  const emptyRelations: OsintRelation[] = [];
+  // Convert infrastructure collection to entity graph data
+  const { entities: infraEntities, relations: infraRelations } = useMemo(() => {
+    if (!execData) return { entities: [] as OsintEntity[], relations: [] as OsintRelation[] };
+
+    const entities: OsintEntity[] = [];
+    const relations: OsintRelation[] = [];
+
+    // Process IXPs
+    if (execData.ixps) {
+      for (const ixp of execData.ixps) {
+        entities.push({
+          id: ixp.id,
+          kind: asEntityKind('ixp'),
+          label: ixp.name,
+          value: ixp.name,
+          attributes: {
+            city: ixp.city,
+            country: ixp.country,
+            region: ixp.region || '',
+            website: ixp.website || '',
+            source: ixp.provenance?.ProviderName || 'unknown',
+          },
+        });
+      }
+    }
+
+    // Process Facilities
+    if (execData.facilities) {
+      for (const fac of execData.facilities) {
+        entities.push({
+          id: fac.id,
+          kind: asEntityKind('facility'),
+          label: fac.name,
+          value: fac.name,
+          attributes: {
+            city: fac.city,
+            country: fac.country,
+            region: fac.region || '',
+            orgName: fac.orgName || '',
+            address: fac.address || '',
+            clli: fac.clli || '',
+            website: fac.website || '',
+            source: fac.provenance?.ProviderName || 'unknown',
+          },
+        });
+      }
+    }
+
+    // Process Landing Stations
+    if (execData.landing_stations) {
+      for (const ls of execData.landing_stations) {
+        entities.push({
+          id: ls.id,
+          kind: asEntityKind('landing_station'),
+          label: ls.name,
+          value: ls.name,
+          attributes: {
+            city: ls.city,
+            country: ls.country,
+            region: ls.region || '',
+            cables: (ls.cables || []).join(', '),
+            source: ls.provenance?.ProviderName || 'unknown',
+          },
+        });
+      }
+    }
+
+    // Process Submarine Cables
+    if (execData.submarine_cables) {
+      for (const cable of execData.submarine_cables) {
+        entities.push({
+          id: cable.id,
+          kind: asEntityKind('submarine_cable'),
+          label: cable.name,
+          value: cable.name,
+          attributes: {
+            owners: (cable.owners || []).join(', '),
+            lengthKm: cable.lengthKm?.toString() || '',
+            rfs: cable.rfs || '',
+            fiberPairs: cable.fiberPairs?.toString() || '',
+            designCapacity: cable.designCapacity || '',
+            source: cable.provenance?.ProviderName || 'unknown',
+          },
+        });
+      }
+    }
+
+    // Process Correlations
+    if (execData.correlations) {
+      for (const corr of execData.correlations) {
+        relations.push({
+          id: corr.id,
+          from: corr.networkEntity,
+          to: corr.infraEntity,
+          kind: corr.relationKind,
+          directed: false,
+          evidenceClass: asEvidenceClass(corr.evidenceClass),
+          provenanceRef: corr.provenanceRef,
+          label: corr.label,
+        });
+      }
+    }
+
+    return { entities, relations };
+  }, [execData]);
 
   // Apply filters to derive renderable data
   const filteredEntities = useMemo(
-    () => filterEntities(emptyEntities, filters),
-    [emptyEntities, filters],
+    () => filterEntities(infraEntities, filters),
+    [infraEntities, filters],
   );
   const entitySet = useMemo(
     () => new Set(filteredEntities.map((e) => e.id)),
     [filteredEntities],
   );
   const filteredRelations = useMemo(
-    () => filterRelations(emptyRelations, filters, entitySet),
-    [emptyRelations, filters, entitySet],
+    () => filterRelations(infraRelations, filters, entitySet),
+    [infraRelations, filters, entitySet],
   );
 
   const layout = useMemo(
@@ -179,6 +285,31 @@ export default function OsintIntelligence() {
     }
   };
 
+  // Execute OSINT query
+  const handleExecute = async () => {
+    if (!providerId || !capability || !target.trim()) return;
+
+    setExecState('loading');
+    setExecError('');
+    setExecData(null);
+    setExecProvenance(null);
+
+    try {
+      const result = await executeOSINT(providerId, capability, target.trim());
+      if (result.err) {
+        setExecState('error');
+        setExecError(result.err);
+      } else {
+        setExecState('success');
+        setExecData(result.data);
+        setExecProvenance(result.provenance);
+      }
+    } catch (e) {
+      setExecState('error');
+      setExecError(e instanceof Error ? e.message : 'Error desconocido');
+    }
+  };
+
   // Selection detail renderers
   const renderEntityDetails = () => {
     if (!selection.entityId) return null;
@@ -237,10 +368,10 @@ export default function OsintIntelligence() {
           <strong>{t('Relación')}: {rel.id}</strong>
           <span className={`tag ${desc.tagClass}`}>{t(desc.labelKey)}</span>
         </div>
-<div className="kv" style={{ marginBottom: 4 }}>
-                      <span className="k">{t('Tipo de relación')}</span>
-                      <span className="v mono">{rel.kind}</span>
-                    </div>
+        <div className="kv" style={{ marginBottom: 4 }}>
+          <span className="k">{t('Tipo de relación')}</span>
+          <span className="v mono">{rel.kind}</span>
+        </div>
         <div className="kv" style={{ marginBottom: 4 }}>
           <span className="k">{t('Desde')}</span>
           <span className="v">{rel.from}{fromEntity ? ` (${fromEntity.value})` : ''}</span>
@@ -279,12 +410,14 @@ export default function OsintIntelligence() {
         <h2>{t('Inteligencia OSINT')}</h2>
         <p className="body-text">
           {t(
-            'Fundación de inteligencia OSINT: los proveedores registrados en el backend y su metadata real. Esta versión no integra proveedores externos ni ejecuta consultas — el registro vacío es el estado esperado. La separación pasivo/activo, el control de capacidades y la autorización de alcance los aplica el backend (Executor y ScopeGuard), no esta pantalla.',
+            'Inteligencia OSINT con proveedores registrados y ejecución de consultas pasivas (V1.5-6). ' +
+            'Infraestructura de Internet: IXPs, facilities, cable landing stations, cables submarinos. ' +
+            'La separación pasivo/activo, el control de capacidades y la autorización de alcance los aplica el backend (Executor y ScopeGuard).'
           )}
         </p>
       </div>
 
-      {/* ---- Query workspace (laid out, not executable in this version) ---- */}
+      {/* ---- Query workspace (executable in V1.5-6) ---- */}
       <section className="card" aria-labelledby="osint-query-h">
         <h3 id="osint-query-h">{t('Consulta')}</h3>
         <div className="field-grid cols-2" style={{ marginTop: 4 }}>
@@ -294,7 +427,7 @@ export default function OsintIntelligence() {
               className="input mono"
               value={target}
               onChange={(e) => setTarget(e.target.value)}
-              placeholder={t('IP, dominio, ASN, CVE…')}
+              placeholder={t('Ej: country:ES, city:Madrid, asn:12345, bbox:...')}
               autoComplete="off"
               spellCheck={false}
             />
@@ -340,16 +473,34 @@ export default function OsintIntelligence() {
           </label>
           <label>
             {' '}
-            <button className="btn" type="button" disabled aria-disabled="true">
-              {t('Ejecutar consulta')}
+            <button className="btn" type="button" onClick={handleExecute} disabled={execState === 'loading'}>
+              {execState === 'loading' ? t('Ejecutando…') : t('Ejecutar consulta')}
             </button>
           </label>
         </div>
         <p className="note" style={{ marginTop: 12 }}>
           {t(
-            'La ejecución de proveedores OSINT llega en una fase posterior. Aquí solo se muestra la metadata registrada.',
+            'Formatos de consulta soportados: country:CC, city:CityName,CC, bbox:south,west,north,east, asn:NUMBER, peeringdb:ix:NUMBER, osm:TYPE/ID. ' +
+            'Las consultas sin contexto geográfico explícito son rechazadas para evitar búsquedas globales.'
           )}
         </p>
+
+        {/* Execution status */}
+        {execState === 'loading' && (
+          <div className="note" role="status" aria-live="polite" style={{ marginTop: 8 }}>
+            {t('Ejecutando consulta pasiva de infraestructura…')}
+          </div>
+        )}
+        {execState === 'error' && (
+          <div className="note" role="alert" style={{ marginTop: 8 }}>
+            {t('Error:')} {execError}
+          </div>
+        )}
+        {execState === 'success' && execData && (
+          <div className="note" style={{ marginTop: 8 }}>
+            {t('Resultados recibidos:')} {t('IXPs')}: {execData.ixps?.length || 0}, {t('Facilities')}: {execData.facilities?.length || 0}, {t('Landing Stations')}: {execData.landing_stations?.length || 0}, {t('Submarine Cables')}: {execData.submarine_cables?.length || 0}, {t('Correlaciones')}: {execData.correlations?.length || 0}
+          </div>
+        )}
       </section>
 
       {/* ---- Registered providers (real metadata) ---- */}
@@ -386,72 +537,14 @@ export default function OsintIntelligence() {
         )}
       </section>
 
-      {/* ---- Results area (prepared, not executed) ---- */}
-      <section className="card" aria-labelledby="osint-results-h" style={{ marginTop: 16 }}>
-        <h3 id="osint-results-h">{t('Resultados')}</h3>
-        <p className="dim" style={{ marginTop: 4 }}>
-          {t(
-            'Área preparada para presentar el resultado de una consulta y sus estados. No se simula ningún resultado en esta versión.',
-          )}
-        </p>
-        <div className="list-reset" style={{ marginTop: 10 }}>
-          {RESULT_STATES.map((s) => (
-            <div className="kv" key={s}>
-              <span className="k">{t(resultStateLabel(s))}</span>
-              <span className="v" style={{ fontFamily: 'inherit', color: 'var(--text-faint)' }}>
-                {t('preparado')}
-              </span>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* ---- Provenance area (prepared) ---- */}
-      <section className="card" aria-labelledby="osint-prov-h" style={{ marginTop: 16 }}>
-        <h3 id="osint-prov-h">{t('Procedencia')}</h3>
-        <p className="dim" style={{ marginTop: 4 }}>
-          {t(
-            'Cada resultado exitoso llevará su procedencia. El endpoint se mostrará saneado y nunca se muestran tokens ni credenciales.',
-          )}
-        </p>
-        <div className="list-reset" style={{ marginTop: 10 }}>
-          {PROVENANCE_FIELDS.map((f) => (
-            <div className="kv" key={f.id}>
-              <span className="k">{t(f.labelKey)}</span>
-              <span className="v" style={{ fontFamily: 'inherit', color: 'var(--text-faint)' }}>
-                {t('preparado')}
-              </span>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* ---- Error presentation reference (prepared) ---- */}
-      <section className="card" aria-labelledby="osint-errors-h" style={{ marginTop: 16 }}>
-        <h3 id="osint-errors-h">{t('Errores contemplados')}</h3>
-        <p className="dim" style={{ marginTop: 4 }}>
-          {t(
-            'Estados de error que la interfaz mostrará de forma legible cuando exista ejecución. No se provocan en esta versión.',
-          )}
-        </p>
-        <div className="list-reset" style={{ marginTop: 10 }}>
-          {OSINT_ERROR_KINDS.map((k) => (
-            <div className="kv" key={k.id}>
-              <span className="k">{t(k.titleKey)}</span>
-              <span className="v" style={{ fontFamily: 'inherit', color: 'var(--text-dim)' }}>
-                {t(k.bodyKey)}
-              </span>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* ---- Entity Graph (V1.5-4) ---- */}
+      {/* ---- InfraMap - Entity Graph (V1.5-6) ---- */}
       <section className="card" aria-labelledby="osint-graph-h" style={{ marginTop: 16 }}>
-        <h3 id="osint-graph-h">{t('Grafo de entidades')}</h3>
+        <h3 id="osint-graph-h">{t('InfraMap — Grafo de infraestructura')}</h3>
         <p className="dim" style={{ marginTop: 4 }}>
           {t(
-            'Visualización de relaciones entre entidades OSINT. Cada edge declara explícitamente su clase de evidencia (Observado / Contexto posible / No demostrado). No hay inferencia automática. El grafo vacío es el estado esperado en esta versión.',
+            'Visualización de entidades de infraestructura de Internet y sus correlaciones explícitas. ' +
+            'Cada relación declara su clase de evidencia: Observado (respaldo directo), Contexto posible (plausible pero no demostrado), No demostrado. ' +
+            'No hay inferencia automática por proximidad geográfica. Los datos provienen de OpenStreetMap y PeeringDB.'
           )}
         </p>
 
@@ -515,7 +608,7 @@ export default function OsintIntelligence() {
             onWheel={handleWheel}
             onClick={handleCanvasClick}
             role="img"
-            aria-label={filteredEntities.length === 0 ? t('No hay entidades OSINT para visualizar todavía.') : t('Grafo de entidades OSINT')}
+            aria-label={filteredEntities.length === 0 ? t('No hay entidades de infraestructura para visualizar. Ejecute una consulta.') : t('InfraMap - Grafo de infraestructura de Internet')}
           >
             {filteredEntities.length === 0 ? (
               <div
@@ -533,10 +626,14 @@ export default function OsintIntelligence() {
                   ∅
                 </div>
                 <p style={{ textAlign: 'center', maxWidth: 320 }}>
-                  {t('No hay entidades OSINT para visualizar todavía.')}
+                  {execState === 'idle'
+                    ? t('No hay entidades de infraestructura para visualizar todavía.')
+                    : t('La consulta no devolvió resultados.')}
                 </p>
                 <p className="dim" style={{ textAlign: 'center', maxWidth: 320, marginTop: 8 }}>
-                  {t('Cuando existan resultados OSINT con relaciones explícitas, aparecerán aquí. No se muestran datos de ejemplo.')}
+                  {execState === 'idle'
+                    ? t('Seleccione una fuente, capacidad y objetivo, luego ejecute la consulta.')
+                    : t('Intente con una consulta más amplia o diferente contexto geográfico.')}
                 </p>
               </div>
             ) : (
@@ -734,10 +831,103 @@ export default function OsintIntelligence() {
           {(selection.entityId || selection.relationId) && (
             <div className="card" style={{ marginTop: 12, background: 'var(--surface-2)' }}>
               <h4 style={{ marginBottom: 8 }}>{t('Detalles de selección')}</h4>
-{selection.entityId && renderEntityDetails()}
+              {selection.entityId && renderEntityDetails()}
               {selection.relationId && renderRelationDetails()}
             </div>
           )}
+
+          {/* Evidence Class Legend */}
+          <div style={{ marginTop: 12, padding: 8, background: 'var(--surface-2)', borderRadius: 4 }}>
+            <strong>{t('Leyenda de clases de evidencia:')}</strong>
+            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 8, fontSize: 12 }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ width: 16, height: 2, background: 'var(--text)', borderBottom: '2px solid var(--text)' }} />
+                {t('Observado (sólida)')}
+              </span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ width: 16, height: 2, background: 'var(--text)', borderBottom: '2px dashed var(--text)' }} />
+                {t('Contexto posible (discontinua)')}
+              </span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ width: 16, height: 2, background: 'transparent', borderBottom: '2px dotted var(--text)' }} />
+                {t('No demostrado (punteada)')}
+              </span>
+            </div>
+          </div>
+
+          {/* Disclaimer */}
+          <div className="note" style={{ marginTop: 12, fontSize: 11 }}>
+            {t(
+              'Aviso: Este grafo muestra SOLO correlaciones con evidencia explícita. ' +
+              'La proximidad geográfica NO implica recorrido de tráfico por cables submarinos. ' +
+              'Clases de evidencia: OBSERVED = respaldo directo (PeeringDB); POSSIBLE_CONTEXT = contexto plausible (co-ubicación); NOT_PROVEN = sin evidencia. ' +
+              'Fuentes: OpenStreetMap (ODbL), PeeringDB (AUP).'
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* ---- Results area (executed) ---- */}
+      <section className="card" aria-labelledby="osint-results-h" style={{ marginTop: 16 }}>
+        <h3 id="osint-results-h">{t('Resultados')}</h3>
+        {execState === 'success' && execData && (
+          <div className="list-reset" style={{ marginTop: 10 }}>
+            {RESULT_STATES.map((s) => (
+              <div className="kv" key={s}>
+                <span className="k">{t(resultStateLabel(s))}</span>
+                <span className="v" style={{ fontFamily: 'inherit' }}>
+                  {s === 'success' ? t('Datos recibidos y procesados') : t('preparado')}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+        {execState === 'idle' && (
+          <p className="dim" style={{ marginTop: 4 }}>
+            {t('Ejecute una consulta para ver resultados aquí.')}
+          </p>
+        )}
+      </section>
+
+      {/* ---- Provenance area (executed) ---- */}
+      <section className="card" aria-labelledby="osint-prov-h" style={{ marginTop: 16 }}>
+        <h3 id="osint-prov-h">{t('Procedencia')}</h3>
+        {execProvenance && (
+          <div className="list-reset" style={{ marginTop: 10 }}>
+            {PROVENANCE_FIELDS.map((f) => (
+              <div className="kv" key={f.id}>
+                <span className="k">{t(f.labelKey)}</span>
+                <span className="v mono" style={{ fontSize: 10 }}>
+                  {(execProvenance as any)[f.id] || t('—')}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+        {!execProvenance && (
+          <p className="dim" style={{ marginTop: 4 }}>
+            {t('Ejecute una consulta para ver la procedencia completa.')}
+          </p>
+        )}
+      </section>
+
+      {/* ---- Error presentation reference ---- */}
+      <section className="card" aria-labelledby="osint-errors-h" style={{ marginTop: 16 }}>
+        <h3 id="osint-errors-h">{t('Errores contemplados')}</h3>
+        <p className="dim" style={{ marginTop: 4 }}>
+          {t(
+            'Estados de error que la interfaz muestra de forma legible cuando existe ejecución.'
+          )}
+        </p>
+        <div className="list-reset" style={{ marginTop: 10 }}>
+          {OSINT_ERROR_KINDS.map((k) => (
+            <div className="kv" key={k.id}>
+              <span className="k">{t(k.titleKey)}</span>
+              <span className="v" style={{ fontFamily: 'inherit', color: 'var(--text-dim)' }}>
+                {t(k.bodyKey)}
+              </span>
+            </div>
+          ))}
         </div>
       </section>
     </div>

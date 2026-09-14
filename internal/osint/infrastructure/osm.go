@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -14,17 +15,20 @@ import (
 	"trazip/internal/osint"
 )
 
+const (
+	// maxOSMResponseSize limits the HTTP response body size to 10MB
+	maxOSMResponseSize = 10 * 1024 * 1024
+)
+
 // OSMClient queries OpenStreetMap Overpass API for infrastructure data.
 // All requests are bounded, timeout-controlled, and cancellable.
 type OSMClient struct {
 	httpClient *http.Client
 	baseURL    string
 	rateLimit  float64 // requests per second
+	userAgent  string
 	lastReq    time.Time
-	mu         struct {
-		sync.Mutex
-		waiters int
-	}
+	mu         sync.Mutex
 }
 
 // OSMConfig configures the OSM client.
@@ -60,6 +64,7 @@ func NewOSMClient(cfg OSMConfig) *OSMClient {
 		httpClient: &http.Client{Timeout: cfg.Timeout},
 		baseURL:    cfg.BaseURL,
 		rateLimit:  cfg.RateLimit,
+		userAgent:  cfg.UserAgent,
 		lastReq:    time.Time{},
 	}
 }
@@ -136,9 +141,6 @@ func (c *OSMClient) QueryOSM(ctx context.Context, overpassQL string) (*OverpassR
 				return nil, ctx.Err()
 			}
 			c.mu.Lock()
-		} else {
-			c.mu.Unlock()
-			c.mu.Lock()
 		}
 		c.lastReq = time.Now()
 		c.mu.Unlock()
@@ -158,7 +160,7 @@ func (c *OSMClient) QueryOSM(ctx context.Context, overpassQL string) (*OverpassR
 		return nil, fmt.Errorf("osm: build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", "TRAZIP/1.0")
+	req.Header.Set("User-Agent", c.userAgent)
 
 	// Execute
 	resp, err := c.httpClient.Do(req)
@@ -178,9 +180,23 @@ func (c *OSMClient) QueryOSM(ctx context.Context, overpassQL string) (*OverpassR
 		return nil, fmt.Errorf("osm: HTTP %d", resp.StatusCode)
 	}
 
-	// Parse response
+	// Read response with size limit
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxOSMResponseSize))
+	if err != nil {
+		return nil, fmt.Errorf("osm: read response: %w", err)
+	}
+
+	// Check if response was truncated
+	if len(body) >= maxOSMResponseSize {
+		// Try to read one more byte to confirm truncation
+		var buf [1]byte
+		if n, _ := resp.Body.Read(buf[:]); n > 0 {
+			return nil, fmt.Errorf("osm: response exceeds maximum size of %d bytes", maxOSMResponseSize)
+		}
+	}
+
 	var result OverpassResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("osm: decode response: %w", err)
 	}
 
@@ -189,17 +205,11 @@ func (c *OSMClient) QueryOSM(ctx context.Context, overpassQL string) (*OverpassR
 
 // CableLandingStationQuery builds an Overpass QL query for cable landing stations.
 // Tags: telecom=cable_landing_station
+// Requires a non-empty bbox - no global search allowed.
 func CableLandingStationQuery(bbox string) string {
-	// bbox format: "south,west,north,east"
 	if bbox == "" {
-		// Global search - no bbox filter
-		return `[out:json][timeout:25];
-(
-  node["telecom"="cable_landing_station"];
-  way["telecom"="cable_landing_station"];
-  relation["telecom"="cable_landing_station"];
-);
-out body center;`
+		// This should not be called with empty bbox - caller must validate
+		return ""
 	}
 	// bbox format: "south,west,north,east"
 	return fmt.Sprintf(`[out:json][timeout:25];
@@ -213,16 +223,10 @@ out body center;`, bbox, bbox, bbox)
 
 // SubmarineCableQuery builds an Overpass QL query for submarine cables.
 // Tags: communication=line + location=underwater, or submarine=yes
+// Requires a non-empty bbox - no global search allowed.
 func SubmarineCableQuery(bbox string) string {
 	if bbox == "" {
-		return `[out:json][timeout:25];
-(
-  way["communication"="line"]["location"="underwater"];
-  way["submarine"="yes"];
-  relation["communication"="line"]["location"="underwater"];
-  relation["submarine"="yes"];
-);
-out body center;`
+		return ""
 	}
 	return fmt.Sprintf(`[out:json][timeout:25];
 (
@@ -236,18 +240,10 @@ out body center;`, bbox, bbox, bbox, bbox)
 
 // IXPQuery builds an Overpass QL query for Internet Exchange Points.
 // Tags: internet_exchange_point=yes, or network_type=ixp
+// Requires a non-empty bbox - no global search allowed.
 func IXPQuery(bbox string) string {
 	if bbox == "" {
-		return `[out:json][timeout:25];
-(
-  node["internet_exchange_point"="yes"];
-  way["internet_exchange_point"="yes"];
-  relation["internet_exchange_point"="yes"];
-  node["network_type"="ixp"];
-  way["network_type"="ixp"];
-  relation["network_type"="ixp"];
-);
-out body center;`
+		return ""
 	}
 	return fmt.Sprintf(`[out:json][timeout:25];
 (
@@ -263,19 +259,10 @@ out body center;`, bbox, bbox, bbox, bbox, bbox, bbox)
 
 // FacilityQuery builds an Overpass QL query for network facilities.
 // Tags: building=data_center, telecom=datacenter, etc.
+// Requires a non-empty bbox - no global search allowed.
 func FacilityQuery(bbox string) string {
 	if bbox == "" {
-		return `[out:json][timeout:25];
-(
-  node["building"="data_center"];
-  way["building"="data_center"];
-  relation["building"="data_center"];
-  node["telecom"="data_center"];
-  way["telecom"="data_center"];
-  node["amenity"="data_center"];
-  way["amenity"="data_center"];
-);
-out body center;`
+		return ""
 	}
 	return fmt.Sprintf(`[out:json][timeout:25];
 (

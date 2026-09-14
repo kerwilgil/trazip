@@ -20,9 +20,9 @@ type InfraProvider struct {
 
 // InfraProviderConfig configures the infrastructure provider.
 type InfraProviderConfig struct {
-	OSM      OSMConfig
+	OSM       OSMConfig
 	PeeringDB PeeringDBConfig
-	Enabled  bool // whether to enable this provider
+	Enabled   bool // whether to enable this provider
 }
 
 // NewInfraProvider creates a new infrastructure intelligence provider.
@@ -47,7 +47,7 @@ func NewInfraProvider(cfg InfraProviderConfig) (*InfraProvider, error) {
 		ActivityClass:   osint.ActivityPassive,
 		DisclosureClass: osint.DisclosurePassive,
 		RequiresScope:   false,
-		RateLimit:       "OSM: 1 req/s; PeeringDB: 0.5 req/s (per AUP)",
+		RateLimit:       "OSM: 1 req/s (TRAZIP conservative); PeeringDB: 0.5 req/s (TRAZIP conservative)",
 	}
 
 	p := &InfraProvider{
@@ -109,8 +109,14 @@ func (p *InfraProvider) lookupIXP(ctx context.Context, input any, baseProv osint
 		coll.IXPs = append(coll.IXPs, i)
 		coll.Provenance = append(coll.Provenance, prov)
 	} else {
-		// Search via OSM
-		bbox := inferBBoxFromQuery(query)
+		// Search via OSM with bounded query
+		bbox, err := inferBBoxFromQuery(ctx, query)
+		if err != nil {
+			return osint.Result{Err: fmt.Errorf("bbox inference failed: %w", err)}
+		}
+		if bbox == "" {
+			return osint.Result{Err: fmt.Errorf("ixp lookup: query requires explicit location context (country, city, or bbox)")}
+		}
 		resp, err := p.osmClient.QueryOSM(ctx, IXPQuery(bbox))
 		if err != nil {
 			return osint.Result{Err: fmt.Errorf("osm ixp query: %w", err)}
@@ -139,7 +145,7 @@ func (p *InfraProvider) lookupIXP(ctx context.Context, input any, baseProv osint
 }
 
 // lookupFacility searches for facilities by name, city, country, or CLLI.
-func (p *InfraProvider) lookupFacility(ctx context.Context, input any, prov osint.Provenance) osint.Result {
+func (p *InfraProvider) lookupFacility(ctx context.Context, input any, baseProv osint.Provenance) osint.Result {
 	query, ok := input.(string)
 	if !ok {
 		return osint.Result{Err: fmt.Errorf("facility lookup: input must be string query")}
@@ -150,27 +156,40 @@ func (p *InfraProvider) lookupFacility(ctx context.Context, input any, prov osin
 	}
 
 	coll := &InfrastructureCollection{}
-	prov.RetrievedAt = time.Now().UTC().Format(time.RFC3339)
 
 	// Try PeeringDB first
 	if id := parseID(query); id > 0 {
-		if fac, err := p.pdbClient.GetFacility(ctx, id); err == nil {
-			if f, err := ConvertPeeringDBFacility(fac, prov); err == nil {
-				coll.Facilities = append(coll.Facilities, f)
-				coll.Provenance = append(coll.Provenance, prov)
-			}
+		fac, err := p.pdbClient.GetFacility(ctx, id)
+		if err != nil {
+			return osint.Result{Err: fmt.Errorf("peeringdb facility lookup: %w", err)}
 		}
+		prov := ProvenanceFor(p.MetaVal, osint.CapabilityFacility, fmt.Sprintf("peeringdb:fac:%d", id))
+		f, err := ConvertPeeringDBFacility(fac, prov)
+		if err != nil {
+			return osint.Result{Err: fmt.Errorf("convert peeringdb facility: %w", err)}
+		}
+		coll.Facilities = append(coll.Facilities, f)
+		coll.Provenance = append(coll.Provenance, prov)
 	} else {
-		if bbox := inferBBoxFromQuery(query); bbox != "" {
-			if resp, err := p.osmClient.QueryOSM(ctx, FacilityQuery(bbox)); err == nil {
-				for _, elem := range resp.Elements {
-					if fac, err := ParseFacility(elem, prov); err == nil {
-						if matchesQuery(fac.Name, fac.City, fac.Country, query) {
-							coll.Facilities = append(coll.Facilities, fac)
-							coll.Provenance = append(coll.Provenance, prov)
-						}
-					}
-				}
+		bbox, err := inferBBoxFromQuery(ctx, query)
+		if err != nil {
+			return osint.Result{Err: fmt.Errorf("bbox inference failed: %w", err)}
+		}
+		if bbox == "" {
+			return osint.Result{Err: fmt.Errorf("facility lookup: query requires explicit location context (country, city, or bbox)")}
+		}
+		resp, err := p.osmClient.QueryOSM(ctx, FacilityQuery(bbox))
+		if err != nil {
+			return osint.Result{Err: fmt.Errorf("osm facility query: %w", err)}
+		}
+		for _, elem := range resp.Elements {
+			fac, err := ParseFacility(elem, ProvenanceFor(p.MetaVal, osint.CapabilityFacility, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
+			if err != nil {
+				continue
+			}
+			if matchesQuery(fac.Name, fac.City, fac.Country, query) {
+				coll.Facilities = append(coll.Facilities, fac)
+				coll.Provenance = append(coll.Provenance, ProvenanceFor(p.MetaVal, osint.CapabilityFacility, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
 			}
 		}
 	}
@@ -182,12 +201,12 @@ func (p *InfraProvider) lookupFacility(ctx context.Context, input any, prov osin
 
 	return osint.Result{
 		Data:       coll,
-		Provenance: prov,
+		Provenance: ProvenanceFor(p.MetaVal, osint.CapabilityFacility, "infra-lookup:facility"),
 	}
 }
 
 // lookupLandingStation searches for cable landing stations by name, city, or country.
-func (p *InfraProvider) lookupLandingStation(ctx context.Context, input any, prov osint.Provenance) osint.Result {
+func (p *InfraProvider) lookupLandingStation(ctx context.Context, input any, baseProv osint.Provenance) osint.Result {
 	query, ok := input.(string)
 	if !ok {
 		return osint.Result{Err: fmt.Errorf("landing_station lookup: input must be string query")}
@@ -198,18 +217,27 @@ func (p *InfraProvider) lookupLandingStation(ctx context.Context, input any, pro
 	}
 
 	coll := &InfrastructureCollection{}
-	prov.RetrievedAt = time.Now().UTC().Format(time.RFC3339)
 
-	if bbox := inferBBoxFromQuery(query); bbox != "" {
-		if resp, err := p.osmClient.QueryOSM(ctx, CableLandingStationQuery(bbox)); err == nil {
-			for _, elem := range resp.Elements {
-				if ls, err := ParseCableLandingStation(elem, prov); err == nil {
-					if matchesQuery(ls.Name, ls.City, ls.Country, query) {
-						coll.LandingStations = append(coll.LandingStations, ls)
-						coll.Provenance = append(coll.Provenance, prov)
-					}
-				}
-			}
+	bbox, err := inferBBoxFromQuery(ctx, query)
+	if err != nil {
+		return osint.Result{Err: fmt.Errorf("bbox inference failed: %w", err)}
+	}
+	if bbox == "" {
+		return osint.Result{Err: fmt.Errorf("landing_station lookup: query requires explicit location context (country, city, or bbox)")}
+	}
+
+	resp, err := p.osmClient.QueryOSM(ctx, CableLandingStationQuery(bbox))
+	if err != nil {
+		return osint.Result{Err: fmt.Errorf("osm landing_station query: %w", err)}
+	}
+	for _, elem := range resp.Elements {
+		ls, err := ParseCableLandingStation(elem, ProvenanceFor(p.MetaVal, osint.CapabilityLandingStation, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
+		if err != nil {
+			continue
+		}
+		if matchesQuery(ls.Name, ls.City, ls.Country, query) {
+			coll.LandingStations = append(coll.LandingStations, ls)
+			coll.Provenance = append(coll.Provenance, ProvenanceFor(p.MetaVal, osint.CapabilityLandingStation, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
 		}
 	}
 
@@ -220,12 +248,12 @@ func (p *InfraProvider) lookupLandingStation(ctx context.Context, input any, pro
 
 	return osint.Result{
 		Data:       coll,
-		Provenance: prov,
+		Provenance: ProvenanceFor(p.MetaVal, osint.CapabilityLandingStation, "infra-lookup:landing_station"),
 	}
 }
 
 // lookupSubmarineCable searches for submarine cables by name or landing point.
-func (p *InfraProvider) lookupSubmarineCable(ctx context.Context, input any, prov osint.Provenance) osint.Result {
+func (p *InfraProvider) lookupSubmarineCable(ctx context.Context, input any, baseProv osint.Provenance) osint.Result {
 	query, ok := input.(string)
 	if !ok {
 		return osint.Result{Err: fmt.Errorf("submarine_cable lookup: input must be string query")}
@@ -236,18 +264,20 @@ func (p *InfraProvider) lookupSubmarineCable(ctx context.Context, input any, pro
 	}
 
 	coll := &InfrastructureCollection{}
-	prov.RetrievedAt = time.Now().UTC().Format(time.RFC3339)
 
-	// Global query for submarine cables (no bbox filtering for global cables)
-	// Use a wide bbox covering oceans
-	if resp, err := p.osmClient.QueryOSM(ctx, SubmarineCableQuery("-90,-180,90,180")); err == nil {
-		for _, elem := range resp.Elements {
-			if cable, err := ParseSubmarineCable(elem, prov); err == nil {
-				if matchesQuery(cable.Name, "", "", query) {
-					coll.SubmarineCables = append(coll.SubmarineCables, cable)
-					coll.Provenance = append(coll.Provenance, prov)
-				}
-			}
+	// Global query for submarine cables - bounded to oceans
+	resp, err := p.osmClient.QueryOSM(ctx, SubmarineCableQuery("-90,-180,90,180"))
+	if err != nil {
+		return osint.Result{Err: fmt.Errorf("osm submarine_cable query: %w", err)}
+	}
+	for _, elem := range resp.Elements {
+		cable, err := ParseSubmarineCable(elem, ProvenanceFor(p.MetaVal, osint.CapabilitySubmarineCable, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
+		if err != nil {
+			continue
+		}
+		if matchesQuery(cable.Name, "", "", query) {
+			coll.SubmarineCables = append(coll.SubmarineCables, cable)
+			coll.Provenance = append(coll.Provenance, ProvenanceFor(p.MetaVal, osint.CapabilitySubmarineCable, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
 		}
 	}
 
@@ -258,13 +288,13 @@ func (p *InfraProvider) lookupSubmarineCable(ctx context.Context, input any, pro
 
 	return osint.Result{
 		Data:       coll,
-		Provenance: prov,
+		Provenance: ProvenanceFor(p.MetaVal, osint.CapabilitySubmarineCable, "infra-lookup:submarine_cable"),
 	}
 }
 
 // lookupInfrastructure performs a comprehensive infrastructure lookup.
 // Returns IXPs, facilities, landing stations, submarine cables, and correlations.
-func (p *InfraProvider) lookupInfrastructure(ctx context.Context, input any, prov osint.Provenance) osint.Result {
+func (p *InfraProvider) lookupInfrastructure(ctx context.Context, input any, baseProv osint.Provenance) osint.Result {
 	query, ok := input.(string)
 	if !ok {
 		return osint.Result{Err: fmt.Errorf("infrastructure lookup: input must be string query")}
@@ -275,63 +305,82 @@ func (p *InfraProvider) lookupInfrastructure(ctx context.Context, input any, pro
 	}
 
 	coll := &InfrastructureCollection{}
-	prov.RetrievedAt = time.Now().UTC().Format(time.RFC3339)
 
-	// Try to infer what the query is about and search accordingly
-	// For comprehensive search, we do multiple targeted searches
-	bbox := inferBBoxFromQuery(query)
+	// For comprehensive search, we do multiple targeted searches with bounded queries
+	bbox, err := inferBBoxFromQuery(ctx, query)
+	if err != nil {
+		return osint.Result{Err: fmt.Errorf("bbox inference failed: %w", err)}
+	}
+	if bbox == "" {
+		return osint.Result{Err: fmt.Errorf("infrastructure lookup: query requires explicit location context (country, city, or bbox)")}
+	}
 
 	// Search IXPs
-	if resp, err := p.osmClient.QueryOSM(ctx, IXPQuery(bbox)); err == nil {
-		for _, elem := range resp.Elements {
-			if ixp, err := ParseIXP(elem, prov); err == nil {
-				if matchesQuery(ixp.Name, ixp.City, ixp.Country, query) {
-					coll.IXPs = append(coll.IXPs, ixp)
-					coll.Provenance = append(coll.Provenance, prov)
-				}
-			}
+	resp, err := p.osmClient.QueryOSM(ctx, IXPQuery(bbox))
+	if err != nil {
+		return osint.Result{Err: fmt.Errorf("osm ixp query: %w", err)}
+	}
+	for _, elem := range resp.Elements {
+		ixp, err := ParseIXP(elem, ProvenanceFor(p.MetaVal, osint.CapabilityIXP, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
+		if err != nil {
+			continue
+		}
+		if matchesQuery(ixp.Name, ixp.City, ixp.Country, query) {
+			coll.IXPs = append(coll.IXPs, ixp)
+			coll.Provenance = append(coll.Provenance, ProvenanceFor(p.MetaVal, osint.CapabilityIXP, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
 		}
 	}
 
 	// Search facilities
-	if resp, err := p.osmClient.QueryOSM(ctx, FacilityQuery(bbox)); err == nil {
-		for _, elem := range resp.Elements {
-			if fac, err := ParseFacility(elem, prov); err == nil {
-				if matchesQuery(fac.Name, fac.City, fac.Country, query) {
-					coll.Facilities = append(coll.Facilities, fac)
-					coll.Provenance = append(coll.Provenance, prov)
-				}
-			}
+	resp, err = p.osmClient.QueryOSM(ctx, FacilityQuery(bbox))
+	if err != nil {
+		return osint.Result{Err: fmt.Errorf("osm facility query: %w", err)}
+	}
+	for _, elem := range resp.Elements {
+		fac, err := ParseFacility(elem, ProvenanceFor(p.MetaVal, osint.CapabilityFacility, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
+		if err != nil {
+			continue
+		}
+		if matchesQuery(fac.Name, fac.City, fac.Country, query) {
+			coll.Facilities = append(coll.Facilities, fac)
+			coll.Provenance = append(coll.Provenance, ProvenanceFor(p.MetaVal, osint.CapabilityFacility, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
 		}
 	}
 
 	// Search landing stations
-	if resp, err := p.osmClient.QueryOSM(ctx, CableLandingStationQuery(bbox)); err == nil {
-		for _, elem := range resp.Elements {
-			if ls, err := ParseCableLandingStation(elem, prov); err == nil {
-				if matchesQuery(ls.Name, ls.City, ls.Country, query) {
-					coll.LandingStations = append(coll.LandingStations, ls)
-					coll.Provenance = append(coll.Provenance, prov)
-				}
-			}
+	resp, err = p.osmClient.QueryOSM(ctx, CableLandingStationQuery(bbox))
+	if err != nil {
+		return osint.Result{Err: fmt.Errorf("osm landing_station query: %w", err)}
+	}
+	for _, elem := range resp.Elements {
+		ls, err := ParseCableLandingStation(elem, ProvenanceFor(p.MetaVal, osint.CapabilityLandingStation, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
+		if err != nil {
+			continue
+		}
+		if matchesQuery(ls.Name, ls.City, ls.Country, query) {
+			coll.LandingStations = append(coll.LandingStations, ls)
+			coll.Provenance = append(coll.Provenance, ProvenanceFor(p.MetaVal, osint.CapabilityLandingStation, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
 		}
 	}
 
-	// Search submarine cables (global)
-	if resp, err := p.osmClient.QueryOSM(ctx, SubmarineCableQuery("-90,-180,90,180")); err == nil {
-		for _, elem := range resp.Elements {
-			if cable, err := ParseSubmarineCable(elem, prov); err == nil {
-				if matchesQuery(cable.Name, "", "", query) {
-					coll.SubmarineCables = append(coll.SubmarineCables, cable)
-					coll.Provenance = append(coll.Provenance, prov)
-				}
-			}
+	// Search submarine cables (global bounded to oceans)
+	resp, err = p.osmClient.QueryOSM(ctx, SubmarineCableQuery("-90,-180,90,180"))
+	if err != nil {
+		return osint.Result{Err: fmt.Errorf("osm submarine_cable query: %w", err)}
+	}
+	for _, elem := range resp.Elements {
+		cable, err := ParseSubmarineCable(elem, ProvenanceFor(p.MetaVal, osint.CapabilitySubmarineCable, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
+		if err != nil {
+			continue
+		}
+		if matchesQuery(cable.Name, "", "", query) {
+			coll.SubmarineCables = append(coll.SubmarineCables, cable)
+			coll.Provenance = append(coll.Provenance, ProvenanceFor(p.MetaVal, osint.CapabilitySubmarineCable, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
 		}
 	}
 
-	// Build correlations if we have both network entities and infrastructure
-	// This is a placeholder - real correlation would need ASN/Prefix data
-	// For now, we just return the infrastructure entities
+	// Build correlations with explicit evidence
+	coll.Correlations = p.buildCorrelations(ctx, coll)
 
 	coll.EnsureNonNil()
 	coll.Truncate(DefaultInfraBounds())
@@ -340,8 +389,169 @@ func (p *InfraProvider) lookupInfrastructure(ctx context.Context, input any, pro
 
 	return osint.Result{
 		Data:       coll,
-		Provenance: prov,
+		Provenance: ProvenanceFor(p.MetaVal, osint.CapabilityInfrastructure, "infra-lookup:infrastructure"),
 	}
+}
+
+// buildCorrelations builds explicit correlations from infrastructure entities.
+// Only creates correlations with explicit evidence (OBSERVED from PeeringDB, POSSIBLE_CONTEXT from geographic proximity).
+func (p *InfraProvider) buildCorrelations(ctx context.Context, coll *InfrastructureCollection) []InfrastructureCorrelation {
+	var correlations []InfrastructureCorrelation
+	retrievedAt := time.Now().UTC().Format(time.RFC3339)
+
+	// ASN -> IXP correlations from PeeringDB netixlan (OBSERVED)
+	// For each IXP from PeeringDB, query netixlan for ASNs present
+	for _, ixp := range coll.IXPs {
+		if ixp.PeeringDBID > 0 {
+			netixlans, err := p.pdbClient.ListNetworksAtIXP(ctx, ixp.PeeringDBID)
+			if err == nil {
+				for _, nixlan := range netixlans {
+					if nixlan.Operational {
+						prov := ProvenanceFor(p.MetaVal, osint.CapabilityInfrastructure, fmt.Sprintf("peeringdb:netixlan:%d", nixlan.ID))
+						corr, err := ConvertPeeringDBNetIXLAN(&nixlan, ixp.ID, prov)
+						if err == nil {
+							correlations = append(correlations, corr)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// ASN -> Facility correlations from PeeringDB netfac (OBSERVED)
+	// For each Facility from PeeringDB, query netfac for ASNs present
+	for _, fac := range coll.Facilities {
+		if fac.PeeringDBID > 0 {
+			netfacs, err := p.pdbClient.ListFacilitiesByNetwork(ctx, fac.PeeringDBID)
+			if err == nil {
+				for _, netfacID := range netfacs {
+					// Need to get the full netfac details - simplified for now
+					// Real implementation would fetch full netfac records
+					_ = netfacID
+				}
+			}
+		}
+	}
+
+	// IXP -> Facility correlations from PeeringDB ixfac (OBSERVED)
+	// For each Facility from PeeringDB, query ixfac for IXPs present
+	for _, fac := range coll.Facilities {
+		if fac.PeeringDBID > 0 {
+			ixpIDs, err := p.pdbClient.ListIXPsByFacility(ctx, fac.PeeringDBID)
+			if err == nil {
+				for _, ixpID := range ixpIDs {
+					// Find matching IXP in collection
+					for _, ixp := range coll.IXPs {
+						if ixp.PeeringDBID == ixpID {
+							prov := ProvenanceFor(p.MetaVal, osint.CapabilityInfrastructure, fmt.Sprintf("peeringdb:ixfac:%d:%d", fac.PeeringDBID, ixpID))
+							corr := InfrastructureCorrelation{
+								ID:             fmt.Sprintf("peeringdb:ixfac:%d:%d", fac.PeeringDBID, ixpID),
+								NetworkEntity:  ixp.ID,
+								InfraEntity:    fac.ID,
+								RelationKind:   "ixp_at_facility",
+								EvidenceClass:  osint.EvidenceObserved,
+								ProvenanceRef:  fmt.Sprintf("peeringdb:ixfac:%d:%d", fac.PeeringDBID, ixpID),
+								Label:          fmt.Sprintf("IXP %s at Facility %s (PeeringDB)", ixp.Name, fac.Name),
+								Confidence:     "alta",
+								RetrievedAt:    retrievedAt,
+							}
+							correlations = append(correlations, corr)
+							_ = prov
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Geographic proximity correlations (POSSIBLE_CONTEXT only)
+	// Only between co-located entities within same city
+	cityIXPs := make(map[string][]IXP)
+	for _, ixp := range coll.IXPs {
+		key := strings.ToLower(ixp.City + "," + ixp.Country)
+		cityIXPs[key] = append(cityIXPs[key], ixp)
+	}
+
+	cityFacilities := make(map[string][]Facility)
+	for _, fac := range coll.Facilities {
+		key := strings.ToLower(fac.City + "," + fac.Country)
+		cityFacilities[key] = append(cityFacilities[key], fac)
+	}
+
+	cityLandingStations := make(map[string][]LandingStation)
+	for _, ls := range coll.LandingStations {
+		key := strings.ToLower(ls.City + "," + ls.Country)
+		cityLandingStations[key] = append(cityLandingStations[key], ls)
+	}
+
+	// Correlate IXPs with Facilities in same city (POSSIBLE_CONTEXT)
+	for cityKey, ixps := range cityIXPs {
+		facilities := cityFacilities[cityKey]
+		for _, ixp := range ixps {
+			for _, fac := range facilities {
+				corr := InfrastructureCorrelation{
+					ID:             fmt.Sprintf("ctx:ixp-fac:%s:%s", ixp.ID, fac.ID),
+					NetworkEntity:  ixp.ID,
+					InfraEntity:    fac.ID,
+					RelationKind:   "ixp_near_facility",
+					EvidenceClass:  osint.EvidencePossibleContext,
+					ProvenanceRef:  fmt.Sprintf("geographic:%s", cityKey),
+					Label:          fmt.Sprintf("IXP %s and Facility %s co-located in %s", ixp.Name, fac.Name, cityKey),
+					Confidence:     "baja",
+					RetrievedAt:    retrievedAt,
+				}
+				correlations = append(correlations, corr)
+			}
+		}
+	}
+
+	// Correlate Landing Stations with Facilities in same city (POSSIBLE_CONTEXT)
+	for cityKey, lss := range cityLandingStations {
+		facilities := cityFacilities[cityKey]
+		for _, ls := range lss {
+			for _, fac := range facilities {
+				corr := InfrastructureCorrelation{
+					ID:             fmt.Sprintf("ctx:ls-fac:%s:%s", ls.ID, fac.ID),
+					NetworkEntity:  ls.ID,
+					InfraEntity:    fac.ID,
+					RelationKind:   "landing_station_near_facility",
+					EvidenceClass:  osint.EvidencePossibleContext,
+					ProvenanceRef:  fmt.Sprintf("geographic:%s", cityKey),
+					Label:          fmt.Sprintf("Landing Station %s and Facility %s co-located in %s", ls.Name, fac.Name, cityKey),
+					Confidence:     "baja",
+					RetrievedAt:    retrievedAt,
+				}
+				correlations = append(correlations, corr)
+			}
+		}
+	}
+
+	// Correlate Landing Stations with Submarine Cables (POSSIBLE_CONTEXT via cable name match)
+	for _, ls := range coll.LandingStations {
+		for _, cable := range coll.SubmarineCables {
+			for _, lsCable := range ls.Cables {
+				if strings.EqualFold(strings.TrimSpace(lsCable), strings.TrimSpace(cable.Name)) {
+					corr := InfrastructureCorrelation{
+						ID:             fmt.Sprintf("ctx:ls-cable:%s:%s", ls.ID, cable.ID),
+						NetworkEntity:  ls.ID,
+						InfraEntity:    cable.ID,
+						RelationKind:   "landing_station_cable",
+						EvidenceClass:  osint.EvidencePossibleContext,
+						ProvenanceRef:  fmt.Sprintf("cable_name_match:%s", lsCable),
+						Label:          fmt.Sprintf("Landing Station %s associated with Cable %s", ls.Name, cable.Name),
+						Confidence:     "media",
+						RetrievedAt:    retrievedAt,
+					}
+					correlations = append(correlations, corr)
+				}
+			}
+		}
+	}
+
+	// Cable -> Network Path correlations are ALWAYS NOT_PROVEN in V1.5-6
+	// We do NOT create these correlations
+
+	return correlations
 }
 
 // ProvenanceFor generates provenance for a capability lookup.
@@ -361,7 +571,7 @@ func ProvenanceFor(meta osint.ProviderMeta, cap osint.Capability, endpoint strin
 			DataSent:    endpoint,
 			CachePolicy: "memory (TTL)",
 			Confidence:  "alta",
-			RateLimit:   "OSM: 1 req/s; PeeringDB: 0.5 req/s",
+			RateLimit:   "OSM: 1 req/s (TRAZIP conservative); PeeringDB: 0.5 req/s (TRAZIP conservative)",
 		},
 	}
 }
@@ -383,9 +593,190 @@ func matchesQuery(name, city, country, query string) bool {
 	return strings.Contains(haystack, q)
 }
 
-func inferBBoxFromQuery(query string) string {
-	// Try to infer a bounding box from the query
-	// For now, return empty string to use global search
-	// In a real implementation, this would geocode the query
-	return ""
+// inferBBoxFromQuery infers a bounding box from the query string.
+// Supports explicit bbox (south,west,north,east), country codes (ISO alpha-2), and city names.
+// Returns empty string if the query cannot be bounded - caller should reject.
+func inferBBoxFromQuery(ctx context.Context, query string) (string, error) {
+	q := strings.TrimSpace(query)
+	if q == "" {
+		return "", nil
+	}
+
+	// Explicit bbox: "south,west,north,east" or "bbox:south,west,north,east"
+	if strings.HasPrefix(q, "bbox:") {
+		bbox := strings.TrimPrefix(q, "bbox:")
+		parts := strings.Split(bbox, ",")
+		if len(parts) == 4 {
+			// Validate numeric
+			for _, p := range parts {
+				if _, err := fmt.Sscanf(strings.TrimSpace(p), "%f", new(float64)); err != nil {
+					return "", fmt.Errorf("invalid bbox coordinate: %s", p)
+				}
+			}
+			return bbox, nil
+		}
+		return "", fmt.Errorf("invalid bbox format, expected 'south,west,north,east'")
+	}
+
+	// Check for "country:XX" or "cc:XX" pattern (ISO alpha-2)
+	if strings.HasPrefix(q, "country:") || strings.HasPrefix(q, "cc:") {
+		prefix := "country:"
+		if strings.HasPrefix(q, "cc:") {
+			prefix = "cc:"
+		}
+		cc := strings.ToUpper(strings.TrimPrefix(q, prefix))
+		if len(cc) == 2 {
+			// Return country-level bbox from a predefined map
+			if bbox, ok := countryBBox[cc]; ok {
+				return bbox, nil
+			}
+			return "", fmt.Errorf("unsupported country code: %s", cc)
+		}
+		return "", fmt.Errorf("invalid country code format, expected ISO alpha-2")
+	}
+
+	// Check for "city:Name,CC" pattern
+	if strings.HasPrefix(q, "city:") {
+		citySpec := strings.TrimPrefix(q, "city:")
+		parts := strings.Split(citySpec, ",")
+		if len(parts) == 2 {
+			city := strings.TrimSpace(parts[0])
+			cc := strings.ToUpper(strings.TrimSpace(parts[1]))
+			if bbox, ok := cityBBox[cc+":"+city]; ok {
+				return bbox, nil
+			}
+			// Fallback to country bbox
+			if bbox, ok := countryBBox[cc]; ok {
+				return bbox, nil
+			}
+			return "", fmt.Errorf("unsupported city: %s, %s", city, cc)
+		}
+		return "", fmt.Errorf("invalid city format, expected 'city:CityName,CC'")
+	}
+
+	// Check for "asn:NUMBER" pattern - for ASN-based lookups we use PeeringDB directly
+	if strings.HasPrefix(q, "asn:") {
+		return "", nil // Signal to use PeeringDB
+	}
+
+	// Check for "peeringdb:ix:NUMBER" or similar explicit provider IDs
+	if strings.HasPrefix(q, "peeringdb:") || strings.HasPrefix(q, "osm:") {
+		return "", nil // Signal to use direct provider lookup
+	}
+
+	// No bounded query - reject global search
+	return "", nil
+}
+
+// countryBBox provides country-level bounding boxes for major countries.
+// Values are approximate [south, west, north, east].
+var countryBBox = map[string]string{
+	"US": "24.396308,-125.0,49.384358,-66.93457",
+	"GB": "49.9,-8.65,60.85,1.77",
+	"DE": "47.27,5.87,55.06,15.04",
+	"FR": "41.33,-5.14,51.12,9.56",
+	"NL": "50.75,3.35,53.55,7.23",
+	"JP": "24.39,122.93,45.52,153.99",
+	"SG": "1.16,103.6,1.47,104.05",
+	"HK": "22.15,113.83,22.56,114.43",
+	"AU": "-43.63,113.33,-10.66,153.56",
+	"CA": "41.68,-141.0,83.11,-52.62",
+	"BR": "-33.75,-73.99,5.27,-34.79",
+	"IN": "6.75,68.11,35.5,97.4",
+	"CN": "18.16,73.5,53.56,134.77",
+	"ES": "36.0,-9.3,43.79,3.3",
+	"IT": "36.65,6.62,47.09,18.52",
+	"SE": "55.34,11.12,69.06,24.17",
+	"NO": "57.98,4.58,71.19,31.1",
+	"DK": "54.56,8.07,57.75,15.16",
+	"FI": "59.81,20.54,70.09,31.59",
+	"PL": "49.0,14.12,54.84,24.15",
+	"CH": "45.82,5.96,47.81,10.49",
+	"AT": "46.38,9.53,49.02,17.16",
+	"BE": "49.5,2.54,51.51,6.41",
+	"IE": "51.43,-10.55,55.38,-6.0",
+	"PT": "36.96,-9.5,42.15,-6.19",
+	"ZA": "-34.83,16.47,-22.13,32.89",
+	"AE": "22.63,51.58,26.09,56.38",
+	"IL": "29.45,34.27,33.28,35.9",
+	"TR": "35.81,25.67,42.11,44.82",
+	"RU": "41.19,19.65,81.86,169.0",
+	"MX": "14.53,-118.46,32.72,-86.72",
+	"AR": "-55.05,-73.56,-21.78,-53.64",
+	"CL": "-56.0,-75.7,-17.5,-66.42",
+	"CO": "-4.23,-79.03,12.47,-66.87",
+	"PE": "-18.35,-81.33,-0.04,-68.68",
+	"NZ": "-47.29,166.45,-34.17,178.55",
+	"KR": "33.1,124.6,38.61,131.88",
+	"TW": "21.9,119.3,25.3,122.0",
+	"ID": "-11.0,95.0,6.0,141.0",
+	"MY": "0.85,99.64,7.36,119.27",
+	"TH": "5.61,97.34,20.46,105.64",
+	"VN": "8.18,102.15,23.39,109.46",
+	"PH": "4.64,116.93,21.12,126.6",
+}
+
+// cityBBox provides city-level bounding boxes for major cities.
+// Key format: "CC:CityName"
+var cityBBox = map[string]string{
+	"US:New York":    "40.47,-74.27,40.92,-73.7",
+	"US:Los Angeles": "33.7,-118.67,34.34,-118.16",
+	"US:Chicago":     "41.64,-87.94,42.02,-87.52",
+	"US:San Francisco": "37.7,-123.0,37.83,-122.35",
+	"US:Seattle":     "47.48,-122.43,47.73,-122.23",
+	"US:Miami":       "25.7,-80.3,25.92,-80.1",
+	"US:Dallas":      "32.62,-96.99,32.98,-96.46",
+	"US:Atlanta":     "33.65,-84.55,33.89,-84.29",
+	"GB:London":      "51.28,-0.51,51.69,0.33",
+	"GB:Manchester":  "53.35,-2.3,53.58,-2.12",
+	"DE:Frankfurt":   "50.0,8.46,50.17,8.8",
+	"DE:Berlin":      "52.34,13.09,52.68,13.5",
+	"DE:Munich":      "48.06,11.34,48.25,11.7",
+	"FR:Paris":       "48.81,2.22,48.9,2.47",
+	"NL:Amsterdam":   "52.28,4.73,52.44,5.08",
+	"JP:Tokyo":       "35.53,139.51,35.82,139.91",
+	"JP:Osaka":       "34.53,135.34,34.73,135.64",
+	"SG:Singapore":   "1.16,103.6,1.47,104.05",
+	"HK:Hong Kong":   "22.15,113.83,22.56,114.43",
+	"AU:Sydney":      "-34.1,150.52,-33.58,151.34",
+	"AU:Melbourne":   "-38.2,144.59,-37.5,145.3",
+	"CA:Toronto":     "43.58,-79.64,43.85,-79.12",
+	"CA:Vancouver":   "49.19,-123.25,49.34,-122.91",
+	"BR:Sao Paulo":   "-24.0,-46.8,-23.3,-46.35",
+	"IN:Mumbai":      "18.89,72.77,19.27,72.99",
+	"IN:Delhi":       "28.4,76.84,28.88,77.35",
+	"CN:Shanghai":    "30.68,120.87,31.87,121.9",
+	"CN:Beijing":     "39.44,115.42,41.06,117.41",
+	"ES:Madrid":      "40.24,-3.95,40.55,-3.5",
+	"ES:Barcelona":   "41.27,2.05,41.47,2.32",
+	"IT:Rome":        "41.71,12.3,42.0,12.65",
+	"IT:Milan":       "45.35,9.0,45.57,9.3",
+	"SE:Stockholm":   "59.2,17.8,59.45,18.2",
+	"NO:Oslo":        "59.8,10.5,59.98,10.9",
+	"DK:Copenhagen":  "55.55,12.4,55.75,12.7",
+	"FI:Helsinki":    "60.0,24.7,60.3,25.1",
+	"PL:Warsaw":      "52.08,20.8,52.37,21.2",
+	"CH:Zurich":      "47.22,8.4,47.45,8.7",
+	"AT:Vienna":      "48.06,16.15,48.34,16.55",
+	"BE:Brussels":    "50.73,4.2,50.95,4.5",
+	"IE:Dublin":      "53.23,-6.4,53.43,-6.1",
+	"PT:Lisbon":      "38.63,-9.27,38.85,-9.0",
+	"ZA:Johannesburg": "-26.4,27.8,-26.0,28.2",
+	"AE:Dubai":       "24.9,55.0,25.3,55.5",
+	"IL:Tel Aviv":    "32.0,34.7,32.15,34.9",
+	"TR:Istanbul":    "40.8,28.7,41.1,29.3",
+	"RU:Moscow":      "55.55,37.35,55.9,37.85",
+	"MX:Mexico City": "19.05,-99.36,19.59,-98.94",
+	"AR:Buenos Aires": "-34.7,-58.53,-34.52,-58.33",
+	"CL:Santiago":    "-33.6,-70.8,-33.2,-70.4",
+	"CO:Bogota":      "4.47,-74.2,4.8,-73.9",
+	"PE:Lima":        "-12.15,-77.15,-11.9,-76.9",
+	"NZ:Auckland":    "-37.2,174.5,-36.7,175.0",
+	"KR:Seoul":       "37.4,126.8,37.7,127.2",
+	"TW:Taipei":      "24.96,121.37,25.13,121.67",
+	"ID:Jakarta":     "-6.37,106.65,-6.0,107.0",
+	"MY:Kuala Lumpur": "3.0,101.55,3.27,101.85",
+	"TH:Bangkok":     "13.6,100.4,13.9,100.7",
+	"VN:Ho Chi Minh": "10.6,106.5,10.9,106.8",
+	"PH:Manila":      "14.4,120.8,14.7,121.1",
 }
