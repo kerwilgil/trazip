@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"trazip/internal/osint"
@@ -21,6 +22,7 @@ type PeeringDBClient struct {
 	apiKey     string // optional, for authenticated requests
 	rateLimit  float64
 	lastReq    time.Time
+	mu         sync.Mutex
 }
 
 // PeeringDBConfig configures the PeeringDB client.
@@ -175,20 +177,35 @@ type PeeringDBFacilityIX struct {
 // path is the API endpoint (e.g., "/ix", "/fac", "/net").
 // params are query parameters (e.g., "id=123", "org_id=456").
 func (c *PeeringDBClient) QueryPeeringDB(ctx context.Context, path string, params url.Values) ([]byte, error) {
-	// Rate limiting
+	// Rate limiting with proper locking and no timer leaks
 	if c.rateLimit > 0 {
+		c.mu.Lock()
 		elapsed := time.Since(c.lastReq)
 		minInterval := time.Duration(float64(time.Second) / c.rateLimit)
 		if elapsed < minInterval {
+			wait := minInterval - elapsed
+			c.mu.Unlock()
+			timer := time.NewTimer(wait)
 			select {
-			case <-time.After(minInterval - elapsed):
+			case <-timer.C:
 			case <-ctx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
 				return nil, ctx.Err()
 			}
+			c.mu.Lock()
+		} else {
+			c.mu.Unlock()
+			c.mu.Lock()
 		}
+		c.lastReq = time.Now()
+		c.mu.Unlock()
+	} else {
+		c.mu.Lock()
+		c.lastReq = time.Now()
+		c.mu.Unlock()
 	}
-
-	c.lastReq = time.Now()
 
 	// Build URL
 	u := c.baseURL + path
@@ -352,6 +369,10 @@ func ConvertPeeringDBIXP(pdb *PeeringDBIXP, prov osint.Provenance) (IXP, error) 
 		// Try to map common country names to ISO alpha-2
 		country = mapCountryNameToAlpha2(pdb.Country)
 	}
+	// If country is still not a valid 2-letter code, use "XX" as unknown
+	if len(country) != 2 {
+		country = "XX"
+	}
 
 	ixp := IXP{
 		ID:          fmt.Sprintf("peeringdb:%d", pdb.ID),
@@ -393,6 +414,10 @@ func ConvertPeeringDBFacility(pdb *PeeringDBFacility, prov osint.Provenance) (Fa
 	country := pdb.Country
 	if len(country) != 2 {
 		country = mapCountryNameToAlpha2(pdb.Country)
+	}
+	// If country is still not a valid 2-letter code, use "XX" as unknown
+	if len(country) != 2 {
+		country = "XX"
 	}
 
 	fac := Facility{
@@ -452,6 +477,7 @@ func ConvertPeeringDBNetIXLAN(pdb *PeeringDBNetIXLAN, ixpID string, prov osint.P
 }
 
 // mapCountryNameToAlpha2 maps common country names to ISO alpha-2 codes.
+// Returns empty string if not found (caller must handle).
 func mapCountryNameToAlpha2(name string) string {
 	m := map[string]string{
 		"United States": "US",
@@ -501,5 +527,5 @@ func mapCountryNameToAlpha2(name string) string {
 	if code, ok := m[name]; ok {
 		return code
 	}
-	return name // Return as-is if not found
+	return "" // Return empty if not found - caller must handle
 }

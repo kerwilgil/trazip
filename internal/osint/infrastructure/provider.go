@@ -61,19 +61,20 @@ func NewInfraProvider(cfg InfraProviderConfig) (*InfraProvider, error) {
 // Lookup implements osint.PassiveRunner for infrastructure intelligence.
 // Supports capabilities: ixp, facility, landing_station, submarine_cable, infrastructure.
 func (p *InfraProvider) Lookup(ctx context.Context, capability osint.Capability, input any) osint.Result {
-	prov := ProvenanceFor(p.MetaVal, capability, "infra-lookup")
+	// Base provenance for this lookup
+	baseProv := ProvenanceFor(p.MetaVal, capability, "infra-lookup")
 
 	switch capability {
 	case osint.CapabilityIXP:
-		return p.lookupIXP(ctx, input, prov)
+		return p.lookupIXP(ctx, input, baseProv)
 	case osint.CapabilityFacility:
-		return p.lookupFacility(ctx, input, prov)
+		return p.lookupFacility(ctx, input, baseProv)
 	case osint.CapabilityLandingStation:
-		return p.lookupLandingStation(ctx, input, prov)
+		return p.lookupLandingStation(ctx, input, baseProv)
 	case osint.CapabilitySubmarineCable:
-		return p.lookupSubmarineCable(ctx, input, prov)
+		return p.lookupSubmarineCable(ctx, input, baseProv)
 	case osint.CapabilityInfrastructure:
-		return p.lookupInfrastructure(ctx, input, prov)
+		return p.lookupInfrastructure(ctx, input, baseProv)
 	default:
 		return osint.Result{
 			Err: &osint.UnsupportedCapabilityError{Provider: p.MetaVal.ID, Capability: capability},
@@ -82,7 +83,7 @@ func (p *InfraProvider) Lookup(ctx context.Context, capability osint.Capability,
 }
 
 // lookupIXP searches for IXPs by name, city, country, or ASN presence.
-func (p *InfraProvider) lookupIXP(ctx context.Context, input any, prov osint.Provenance) osint.Result {
+func (p *InfraProvider) lookupIXP(ctx context.Context, input any, baseProv osint.Provenance) osint.Result {
 	query, ok := input.(string)
 	if !ok {
 		return osint.Result{Err: fmt.Errorf("ixp lookup: input must be string query")}
@@ -93,29 +94,35 @@ func (p *InfraProvider) lookupIXP(ctx context.Context, input any, prov osint.Pro
 	}
 
 	coll := &InfrastructureCollection{}
-	prov.RetrievedAt = time.Now().UTC().Format(time.RFC3339)
 
-	// Try PeeringDB first if query looks like an ID or name
+	// Try PeeringDB first if query looks like an ID
 	if id := parseID(query); id > 0 {
-		if ixp, err := p.pdbClient.GetIXP(ctx, id); err == nil {
-			if i, err := ConvertPeeringDBIXP(ixp, prov); err == nil {
-				coll.IXPs = append(coll.IXPs, i)
-				coll.Provenance = append(coll.Provenance, prov)
-			}
+		ixp, err := p.pdbClient.GetIXP(ctx, id)
+		if err != nil {
+			return osint.Result{Err: fmt.Errorf("peeringdb ixp lookup: %w", err)}
 		}
+		prov := ProvenanceFor(p.MetaVal, osint.CapabilityIXP, fmt.Sprintf("peeringdb:ix:%d", id))
+		i, err := ConvertPeeringDBIXP(ixp, prov)
+		if err != nil {
+			return osint.Result{Err: fmt.Errorf("convert peeringdb ixp: %w", err)}
+		}
+		coll.IXPs = append(coll.IXPs, i)
+		coll.Provenance = append(coll.Provenance, prov)
 	} else {
-		// Search by name/city in PeeringDB (via /ix with name filter)
-		// For now, we do a simple name match via OSM
-		if bbox := inferBBoxFromQuery(query); bbox != "" {
-			if resp, err := p.osmClient.QueryOSM(ctx, IXPQuery(bbox)); err == nil {
-				for _, elem := range resp.Elements {
-					if ixp, err := ParseIXP(elem, prov); err == nil {
-						if matchesQuery(ixp.Name, ixp.City, ixp.Country, query) {
-							coll.IXPs = append(coll.IXPs, ixp)
-							coll.Provenance = append(coll.Provenance, prov)
-						}
-					}
-				}
+		// Search via OSM
+		bbox := inferBBoxFromQuery(query)
+		resp, err := p.osmClient.QueryOSM(ctx, IXPQuery(bbox))
+		if err != nil {
+			return osint.Result{Err: fmt.Errorf("osm ixp query: %w", err)}
+		}
+		for _, elem := range resp.Elements {
+			ixp, err := ParseIXP(elem, ProvenanceFor(p.MetaVal, osint.CapabilityIXP, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
+			if err != nil {
+				continue // Skip invalid elements
+			}
+			if matchesQuery(ixp.Name, ixp.City, ixp.Country, query) {
+				coll.IXPs = append(coll.IXPs, ixp)
+				coll.Provenance = append(coll.Provenance, ProvenanceFor(p.MetaVal, osint.CapabilityIXP, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
 			}
 		}
 	}
@@ -127,7 +134,7 @@ func (p *InfraProvider) lookupIXP(ctx context.Context, input any, prov osint.Pro
 
 	return osint.Result{
 		Data:       coll,
-		Provenance: prov,
+		Provenance: ProvenanceFor(p.MetaVal, osint.CapabilityIXP, "infra-lookup:ixp"),
 	}
 }
 

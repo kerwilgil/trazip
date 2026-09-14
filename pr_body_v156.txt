@@ -1,0 +1,81 @@
+## Summary
+Implements V1.5-6 Internet Infrastructure Intelligence — adds contextual infrastructure data (IXPs, facilities, cable landing stations, submarine cables) to the OSINT Intelligence subsystem.
+
+## Root Cause / Motivation
+TRAZIP's OSINT Intelligence subsystem (V1.5-2 through V1.5-5) provides network intelligence (RDAP, CVE, CT, ASN mapping, web intelligence, BGP intelligence) but lacks contextual Internet infrastructure data that operators need to understand network topology, peering relationships, and physical infrastructure context.
+
+## Implementation
+### Core Models (`internal/osint/infrastructure/models.go`)
+- **IXP**: Internet Exchange Points with peering LANs, provenance, bounds
+- **Facility**: Colocation/data center facilities with CLLI codes, coordinates
+- **LandingStation**: Cable landing stations with associated cables
+- **SubmarineCable**: Submarine cable systems (contextual only — NO traversal claims)
+- **InfrastructureCorrelation**: Explicit contextual links (ASN→IXP, ASN→Facility, etc.) with explicit EvidenceClass
+- **InfrastructureCollection**: Bounded, deterministic collections with provenance
+
+### Data Sources (`internal/osint/infrastructure/`)
+- **OSM/Overpass API** (`osm.go`): Queries for cable_landing_station, internet_exchange_point, data_center, submarine cables. Bounded, timeout-controlled, cancellable.
+- **PeeringDB** (`peeringdb.go`): REST API client for IXPs, facilities, networks, IXLANs, netixlans. Respects AUP (no bulk redistribution, no contact harvesting, rate limiting).
+
+### Provider (`internal/osint/infrastructure/provider.go`)
+- `InfraProvider` implements `osint.PassiveRunner`
+- Capabilities: `ixp`, `facility`, `landing_station`, `submarine_cable`, `infrastructure`
+- ActivityClass: Passive, DisclosureClass: Passive, RequiresScope: false
+- Provenance: full external.Disclosure envelope
+
+### Integration
+- Registered in `Service.NewService` via `osintRegistry.Register`
+- Appears in `ListOSINTProviders` UI
+- Capabilities: `ixp`, `facility`, `landing_station`, `submarine_cable`, `infrastructure`
+
+## Evidence & Correlation Semantics
+- **NO automatic promotion**: EvidenceClass is explicit (OBSERVED, POSSIBLE_CONTEXT, NOT_PROVEN)
+- **NO geographic proximity → observed traversal**: `GEOGRAPHIC PROXIMITY != CABLE TRAVERSAL`
+- **NO fabricated relations**: Entity Graph only materializes explicit evidence
+- **EvidenceClass for correlations**: OBSERVED requires ProvenanceRef, POSSIBLE_CONTEXT for contextual links
+
+## Bounds & Resilience
+- All clients: context cancellation, timeout, bounded cache, rate limiting
+- OSM: 1 req/s, 30s timeout
+- PeeringDB: 0.5 req/s (per AUP), 30s timeout
+- Collections bounded (default: 500 IXPs, 500 facilities, 200 landing stations, 300 cables, 1000 correlations)
+- Non-nil JSON arrays guaranteed
+- Deterministic ordering
+
+## Testing
+- All existing tests pass
+- Updated OSINT provider tests for infrastructure provider registration
+- Infrastructure package ready for test expansion (parsing, malformed payload, timeout, 429, 5xx, bounds, ordering, provenance, disclosure, no auto-promotion, no geo→observed)
+
+## Compliance
+- OSM: ODbL attribution, bounded queries, no bulk redistribution
+- PeeringDB: AUP compliant (no bulk redistribution, no contact harvesting, rate limiting, 429 handling)
+- No prohibited sources (TeleGeography, SubmarineCableMap, PCH, Shodan, Censys, CVE/NVD, CISA KEV)
+
+## Files Changed
+- `internal/osint/model.go`: +29/-9 (capabilities + entity kinds)
+- `internal/api/service.go`: +24 (provider registration)
+- `internal/api/osint_test.go`: +54/-17 (updated tests)
+- `internal/osint/model.go`: +29/-9 (capabilities + entity kinds)
+- `internal/osint/infrastructure/models.go`: 13658 bytes (new)
+- `internal/osint/infrastructure/osm.go`: 13254 bytes (new)
+- `internal/osint/infrastructure/peeringdb.go`: 15740 bytes (new)
+- `internal/osint/infrastructure/provider.go`: 12077 bytes (new)
+
+## Validation
+- `go test ./...` ✅ PASS
+- `go vet ./...` ✅ PASS
+- `go build ./...` ✅ PASS
+- `npm test` (90/90) ✅ PASS
+- `npm run build` ✅ PASS
+
+## Scope
+- No V1.5-7+ features (CVE, KEV, active recon, etc.)
+- No TeleGeography/SubmarineCableMap/PCH data
+- No active recon expansion
+- No V1.5-7+ features
+
+## Next Steps
+After CI passes and independent review:
+1. Squash merge to main
+2. V1.5-6 baseline established for V1.5-7 (CVE Intelligence)

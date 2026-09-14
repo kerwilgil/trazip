@@ -118,22 +118,35 @@ type OverpassCenter struct {
 // QueryOSM executes an Overpass QL query and returns parsed elements.
 // The query must be a valid Overpass QL string.
 func (c *OSMClient) QueryOSM(ctx context.Context, overpassQL string) (*OverpassResponse, error) {
-	// Rate limiting
+	// Rate limiting with proper locking and no timer leaks
 	if c.rateLimit > 0 {
+		c.mu.Lock()
 		elapsed := time.Since(c.lastReq)
 		minInterval := time.Duration(float64(time.Second) / c.rateLimit)
 		if elapsed < minInterval {
+			wait := minInterval - elapsed
+			c.mu.Unlock()
+			timer := time.NewTimer(wait)
 			select {
-			case <-time.After(minInterval - elapsed):
+			case <-timer.C:
 			case <-ctx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
 				return nil, ctx.Err()
 			}
+			c.mu.Lock()
+		} else {
+			c.mu.Unlock()
+			c.mu.Lock()
 		}
+		c.lastReq = time.Now()
+		c.mu.Unlock()
+	} else {
+		c.mu.Lock()
+		c.lastReq = time.Now()
+		c.mu.Unlock()
 	}
-
-	c.mu.Lock()
-	c.lastReq = time.Now()
-	c.mu.Unlock()
 
 	// Build request
 	data := url.Values{}
@@ -178,6 +191,17 @@ func (c *OSMClient) QueryOSM(ctx context.Context, overpassQL string) (*OverpassR
 // Tags: telecom=cable_landing_station
 func CableLandingStationQuery(bbox string) string {
 	// bbox format: "south,west,north,east"
+	if bbox == "" {
+		// Global search - no bbox filter
+		return `[out:json][timeout:25];
+(
+  node["telecom"="cable_landing_station"];
+  way["telecom"="cable_landing_station"];
+  relation["telecom"="cable_landing_station"];
+);
+out body center;`
+	}
+	// bbox format: "south,west,north,east"
 	return fmt.Sprintf(`[out:json][timeout:25];
 (
   node["telecom"="cable_landing_station"](%s);
@@ -190,6 +214,16 @@ out body center;`, bbox, bbox, bbox)
 // SubmarineCableQuery builds an Overpass QL query for submarine cables.
 // Tags: communication=line + location=underwater, or submarine=yes
 func SubmarineCableQuery(bbox string) string {
+	if bbox == "" {
+		return `[out:json][timeout:25];
+(
+  way["communication"="line"]["location"="underwater"];
+  way["submarine"="yes"];
+  relation["communication"="line"]["location"="underwater"];
+  relation["submarine"="yes"];
+);
+out body center;`
+	}
 	return fmt.Sprintf(`[out:json][timeout:25];
 (
   way["communication"="line"]["location"="underwater"](%s);
@@ -203,6 +237,18 @@ out body center;`, bbox, bbox, bbox, bbox)
 // IXPQuery builds an Overpass QL query for Internet Exchange Points.
 // Tags: internet_exchange_point=yes, or network_type=ixp
 func IXPQuery(bbox string) string {
+	if bbox == "" {
+		return `[out:json][timeout:25];
+(
+  node["internet_exchange_point"="yes"];
+  way["internet_exchange_point"="yes"];
+  relation["internet_exchange_point"="yes"];
+  node["network_type"="ixp"];
+  way["network_type"="ixp"];
+  relation["network_type"="ixp"];
+);
+out body center;`
+	}
 	return fmt.Sprintf(`[out:json][timeout:25];
 (
   node["internet_exchange_point"="yes"](%s);
@@ -218,6 +264,19 @@ out body center;`, bbox, bbox, bbox, bbox, bbox, bbox)
 // FacilityQuery builds an Overpass QL query for network facilities.
 // Tags: building=data_center, telecom=datacenter, etc.
 func FacilityQuery(bbox string) string {
+	if bbox == "" {
+		return `[out:json][timeout:25];
+(
+  node["building"="data_center"];
+  way["building"="data_center"];
+  relation["building"="data_center"];
+  node["telecom"="data_center"];
+  way["telecom"="data_center"];
+  node["amenity"="data_center"];
+  way["amenity"="data_center"];
+);
+out body center;`
+	}
 	return fmt.Sprintf(`[out:json][timeout:25];
 (
   node["building"="data_center"](%s);
