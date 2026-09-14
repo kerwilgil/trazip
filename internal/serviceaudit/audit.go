@@ -94,7 +94,12 @@ func CompareExposure(observed, expected []int) ExposureResult {
 	for _, p := range exp {
 		eSet[p] = true
 	}
-	r := ExposureResult{Observed: obs, Expected: exp}
+	r := ExposureResult{
+		Observed:   obs,
+		Expected:   exp,
+		Unexpected: []int{},
+		Missing:    []int{},
+	}
 	for _, p := range obs {
 		if !eSet[p] {
 			r.Unexpected = append(r.Unexpected, p)
