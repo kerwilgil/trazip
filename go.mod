@@ -14,7 +14,7 @@ require (
 	github.com/nyaruka/phonenumbers v1.8.1
 	github.com/oschwald/maxminddb-golang/v2 v2.4.1
 	github.com/stretchr/testify v1.11.1
-	github.com/wailsapp/wails/v2 v2.13.0
+	github.com/wailsapp/wails/v2 v2.15.0
 	golang.org/x/net v0.56.0
 	golang.org/x/sys v0.46.0
 )
@@ -44,7 +44,7 @@ require (
 	github.com/wailsapp/go-webview2 v1.0.22 // indirect
 	github.com/wailsapp/mimetype v1.4.1 // indirect
 	golang.org/x/crypto v0.53.0 // indirect
-	golang.org/x/text v0.38.0 // indirect
+	golang.org/x/text v0.39.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
