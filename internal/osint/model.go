@@ -200,6 +200,12 @@ const (
 	CapabilityTraceroute              Capability = "traceroute"
 	CapabilityServiceDetection        Capability = "service_detection"
 	CapabilityActiveDNS               Capability = "active_dns"
+	// V1.5-6 Infrastructure Intelligence capabilities
+	CapabilityIXP              Capability = "ixp"
+	CapabilityFacility         Capability = "facility"
+	CapabilityLandingStation   Capability = "landing_station"
+	CapabilitySubmarineCable   Capability = "submarine_cable"
+	CapabilityInfrastructure   Capability = "infrastructure"
 )
 
 // ProviderMeta describes a provider's identity and capabilities. A provider
@@ -332,15 +338,20 @@ func (e EvidenceClass) IsValid() bool {
 type EntityKind string
 
 const (
-	EntityKindUnknown      EntityKind = ""
-	EntityKindIP           EntityKind = "ip"
-	EntityKindDomain       EntityKind = "domain"
-	EntityKindASN          EntityKind = "asn"
-	EntityKindCertificate  EntityKind = "certificate"
-	EntityKindCVE          EntityKind = "cve"
-	EntityKindOrganization EntityKind = "organization"
-	EntityKindURL          EntityKind = "url"
-	EntityKindCountry      EntityKind = "country"
+	EntityKindUnknown          EntityKind = ""
+	EntityKindIP               EntityKind = "ip"
+	EntityKindDomain           EntityKind = "domain"
+	EntityKindASN              EntityKind = "asn"
+	EntityKindCertificate      EntityKind = "certificate"
+	EntityKindCVE              EntityKind = "cve"
+	EntityKindOrganization     EntityKind = "organization"
+	EntityKindURL              EntityKind = "url"
+	EntityKindCountry          EntityKind = "country"
+	// V1.5-6 Infrastructure Intelligence entity kinds
+	EntityKindIXP              EntityKind = "ixp"
+	EntityKindFacility         EntityKind = "facility"
+	EntityKindLandingStation   EntityKind = "landing_station"
+	EntityKindSubmarineCable   EntityKind = "submarine_cable"
 )
 
 // Entity represents a node in the OSINT entity graph.

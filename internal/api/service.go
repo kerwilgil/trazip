@@ -35,6 +35,7 @@ import (
 	"trazip/internal/model"
 	"trazip/internal/monitor"
 	"trazip/internal/osint"
+	"trazip/internal/osint/infrastructure"
 	"trazip/internal/packet"
 	"trazip/internal/paths"
 	"trazip/internal/pcap"
@@ -203,6 +204,29 @@ func NewServiceWithSessions(sessions *session.Manager, monitorMgr *monitor.Manag
 		bgpSessions:       make(map[string]*bgp.RealtimeSession),
 		bgpFinalSnapshots: make(map[string]bgp.RealtimeSessionInfo),
 		osintRegistry:     osint.NewRegistry(),
+	}
+	// Register infrastructure intelligence provider (V1.5-6)
+	if infraProvider, err := infrastructure.NewInfraProvider(infrastructure.InfraProviderConfig{
+		OSM: infrastructure.OSMConfig{
+			Timeout:    30 * time.Second,
+			RateLimit:  1.0,
+			BaseURL:    "https://overpass-api.de/api/interpreter",
+			UserAgent:  "TRAZIP/1.0 (infrastructure-intelligence; +https://github.com/kerwilgil/trazip)",
+		},
+		PeeringDB: infrastructure.PeeringDBConfig{
+			Timeout:   30 * time.Second,
+			RateLimit: 0.5,
+			BaseURL:   "https://peeringdb.com/api",
+			UserAgent: "TRAZIP/1.0 (infrastructure-intelligence; +https://github.com/kerwilgil/trazip)",
+		},
+		Enabled: true,
+	}); err != nil {
+		// Log but don't fail startup - infrastructure intelligence is optional
+		_ = err
+	} else if infraProvider != nil {
+		if err := s.osintRegistry.Register(infraProvider); err != nil {
+			_ = err
+		}
 	}
 	s.geoUpdater = geoupdate.New(dataDir, geo)
 	s.updateMgr = update.NewManager(Version, paths.Sub("updates"), paths.Sub("update-settings.json"))
