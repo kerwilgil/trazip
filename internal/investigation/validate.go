@@ -74,10 +74,12 @@ func validateNote(note string) (string, error) {
 }
 
 var validSourceKinds = map[correlation.SourceKind]bool{
-	correlation.SourceDiagnose: true,
-	correlation.SourcePCAP:     true,
-	correlation.SourceMonitor:  true,
-	correlation.SourceVoIP:     true,
+	correlation.SourceDiagnose:        true,
+	correlation.SourcePCAP:            true,
+	correlation.SourceMonitor:         true,
+	correlation.SourceVoIP:            true,
+	correlation.SourceWebIntel:        true,
+	correlation.SourceBGPIntelligence: true,
 }
 
 var validLevels = map[model.Level]bool{

@@ -9,10 +9,16 @@ import {
   investigationRemoveEntry,
   investigationUpdateEntryNote,
   investigationExportReport,
+  investigationEnrich,
   type investigation,
+  type Finding,
+  type FindingEvidence,
+  type FindingCorrelation,
+  type EnrichmentStats,
 } from '../lib/api';
 import { LEVEL_CLASS, sourceLabel, sortTimeline, formatInstant } from '../lib/investigationHelpers';
 import { useI18n } from '../lib/i18n';
+import EnrichmentPanel from '../components/EnrichmentPanel';
 
 const NO_BACKEND = 'Necesita el runtime Wails (app de escritorio). En el preview del navegador no hay backend.';
 
@@ -132,6 +138,15 @@ export default function Investigations() {
   const [editName, setEditName] = useState('');
   const [editObjective, setEditObjective] = useState('');
 
+  const [enriching, setEnriching] = useState(false);
+  const [enrichmentResult, setEnrichmentResult] = useState<{
+    stats: EnrichmentStats;
+    findings: Finding[];
+    correlations: FindingCorrelation[];
+    evidence: Record<string, FindingEvidence[]>;
+  } | null>(null);
+  const [enrichmentError, setEnrichmentError] = useState<string | null>(null);
+
   async function refreshList() {
     const res = await investigationList();
     setList(res.investigations ?? []);
@@ -147,6 +162,8 @@ export default function Investigations() {
     setSelectedId(id);
     setError(null);
     setEditing(false);
+    setEnrichmentResult(null);
+    setEnrichmentError(null);
     try {
       const inv = await investigationGet(id);
       setSelected(inv);
@@ -371,6 +388,51 @@ export default function Investigations() {
                     ))}
                   </div>
                 </div>
+
+                <div style={{ marginTop: 14 }}>
+                  <p className="dim" style={{ fontSize: 12 }}>{t('Enriquecer investigación')}</p>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button
+                      className="btn"
+                      style={{ fontSize: 11.5 }}
+                      disabled={enriching}
+                      onClick={async () => {
+                        if (!selected) return;
+                        setEnriching(true);
+                        setEnrichmentError(null);
+                        setEnrichmentResult(null);
+                        try {
+                          const result = await investigationEnrich(selected.id);
+                          if (result.findings.length === 0) {
+                            setEnrichmentError(t('No se pudieron generar hallazgos. Añade evidencias primero.'));
+                          } else {
+                            setEnrichmentResult({
+                              stats: result.stats,
+                              findings: result.findings,
+                              correlations: result.correlations,
+                              evidence: result.evidence,
+                            });
+                          }
+                        } catch (e) {
+                          setEnrichmentError(String(e));
+                        } finally {
+                          setEnriching(false);
+                        }
+                      }}
+                    >
+                      {enriching ? t('Enriqueciendo...') : t('Enriquecer')}
+                    </button>
+                  </div>
+                </div>
+
+                {enrichmentError && (
+                  <div className="note" style={{ marginTop: 14 }}>{enrichmentError}</div>
+                )}
+
+                {enrichmentResult && (
+                  <EnrichmentPanel result={enrichmentResult} t={t} />
+                )}
+
               </div>
 
               <h3 style={{ marginTop: 20 }}>{t('Timeline')}</h3>

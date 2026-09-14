@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"strings"
 
+	"trazip/internal/bgp"
 	"trazip/internal/correlation"
 	"trazip/internal/diagnosis"
 	"trazip/internal/investigation"
 	"trazip/internal/monitor"
 	"trazip/internal/report"
 	"trazip/internal/voip"
+	"trazip/internal/webintel"
 )
 
 // InvestigationAddResult wraps AddSnapshot's own (Entry, existing bool)
@@ -195,4 +197,79 @@ func (s *Service) InvestigationAddVoIPCall(investigationID string, call voip.Cal
 		return InvestigationAddResult{}, fmt.Errorf("esta llamada todavía no tiene un diagnóstico para agregar")
 	}
 	return addResult(s.investigations.AddSnapshot(investigationID, snap))
+}
+
+// InvestigationAddWebIntel persists a completed WebIntel analysis result —
+// it never runs WebIntel again. It stores the result as a Snapshot for
+// later enrichment. NO network calls are made.
+func (s *Service) InvestigationAddWebIntel(investigationID string, res webintel.Result, subject, sourceID, occurredAt string) (InvestigationAddResult, error) {
+	snap, err := investigation.ToSnapshotWebIntel(res, subject, sourceID, occurredAt)
+	if err != nil {
+		return InvestigationAddResult{}, fmt.Errorf("webintel: %w", err)
+	}
+	return addResult(s.investigations.AddSnapshot(investigationID, snap))
+}
+
+// BGPAddInput wraps optional BGP overview and security results for a single
+// InvestigationAddBGP call. Using a struct with pointer fields allows Wails
+// to generate a TypeScript binding with optional properties instead of
+// required non-null struct parameters.
+type BGPAddInput struct {
+	Overview *bgp.Overview        `json:"overview,omitempty"`
+	Security *bgp.SecurityResult  `json:"security,omitempty"`
+}
+
+// InvestigationAddBGP persists a completed BGP Intelligence result —
+// it never runs BGP Intelligence again. It stores the result as a Snapshot
+// for later enrichment. NO network calls are made.
+func (s *Service) InvestigationAddBGP(investigationID string, resource string, input BGPAddInput, occurredAt string) (InvestigationAddResult, error) {
+	if resource == "" {
+		return InvestigationAddResult{}, fmt.Errorf("bgp: missing resource")
+	}
+	if input.Overview == nil && input.Security == nil {
+		return InvestigationAddResult{}, fmt.Errorf("bgp: overview and security are both nil; provide at least one")
+	}
+	snap, err := investigation.ToSnapshotBGP(resource, input.Overview, input.Security, occurredAt)
+	if err != nil {
+		return InvestigationAddResult{}, fmt.Errorf("bgp: %w", err)
+	}
+	return addResult(s.investigations.AddSnapshot(investigationID, snap))
+}
+
+// InvestigationEnrichResult wraps the enrichment result for the Wails binding.
+type InvestigationEnrichResult struct {
+	InvestigationID   string             `json:"investigationId"`
+	InvestigationName string           `json:"investigationName"`
+	Findings          []investigation.Finding    `json:"findings"`
+	Correlations      []investigation.FindingCorrelation `json:"correlations"`
+	Evidence          map[string][]investigation.FindingEvidence `json:"evidence"`
+	EntryMapping      map[string]string  `json:"entryMapping"`
+	Stats             investigation.EnrichmentStats    `json:"stats"`
+}
+
+// InvestigationEnrich enriches an existing Investigation by converting its
+// Entries into Findings, Evidence, and Correlations using the EnrichmentEngine.
+// This is a READ-ONLY operation — it does NOT modify the stored Investigation,
+// does NOT execute any providers, and does NOT make any network calls.
+// It only transforms and correlates evidence that is already explicitly
+// present in the Investigation's Entries.
+func (s *Service) InvestigationEnrich(id string) (InvestigationEnrichResult, error) {
+	inv, err := s.investigations.Get(id)
+	if err != nil {
+		return InvestigationEnrichResult{}, err
+	}
+	result, err := investigation.EnrichInvestigation(inv)
+	if err != nil {
+		return InvestigationEnrichResult{}, err
+	}
+	// Convert internal types to API-facing types (they're the same package)
+	return InvestigationEnrichResult{
+		InvestigationID:   result.InvestigationID,
+		InvestigationName: result.InvestigationName,
+		Findings:          result.Findings,
+		Correlations:      result.Correlations,
+		Evidence:          result.Evidence,
+		EntryMapping:      result.EntryMapping,
+		Stats:             result.Stats,
+	}, nil
 }

@@ -7,11 +7,7 @@ import (
 	"sync"
 )
 
-// Default bounds for the entity graph.
-const (
-	DefaultMaxEntities  = 500
-	DefaultMaxRelations = 1000
-)
+
 
 // EntityGraphError wraps graph operation errors.
 type EntityGraphError struct {

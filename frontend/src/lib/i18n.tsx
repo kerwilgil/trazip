@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+﻿﻿import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 
 export type Locale = 'es' | 'en-US';
 export type TranslationValues = Record<string, string | number>;
@@ -114,7 +114,6 @@ export const EN: Record<string, string> = {
   'Obtenido': 'Actual',
   '¿Coincide?': 'Match?',
   '(no encontrado)': '(not found)',
-  'Exportar evidencia:': 'Export evidence:',
   'Necesita el runtime Wails (app de escritorio). En el preview del navegador no hay backend.': 'The Wails runtime is required (desktop app). The browser preview has no backend.',
   'Nunca': 'Never',
   'Configuración guardada. La License Key quedó protegida en el Llavero de macOS.': 'Settings saved. The License Key is protected in the macOS Keychain.',
@@ -1031,6 +1030,20 @@ export const EN: Record<string, string> = {
   'La proximidad temporal entre hallazgos no demuestra causalidad.': 'Temporal proximity between findings does not demonstrate causality.',
   'Módulos incluidos': 'Modules included',
   'Cantidad de evidencias': 'Evidence count',
+  // Investigation Enrichment (V1.5-5)
+  'Enriquecer investigación': 'Enrich investigation',
+  'Enriquecer': 'Enrich',
+  'Enriqueciendo...': 'Enriching...',
+  'Resultado del enriquecimiento': 'Enrichment result',
+  'Hallazgos': 'Findings',
+  'Correlaciones': 'Correlations',
+  'Sin hallazgos': 'No findings',
+  'Sin correlaciones': 'No correlations',
+  'Sin evidencias': 'No evidences',
+  'No se pudo enriquecer la investigación': 'Could not enrich investigation',
+  'No se pudieron generar hallazgos. Añade evidencias primero.': 'Could not generate findings. Add evidence first.',
+  'Enriquecimiento completado': 'Enrichment completed',
+  'Detalle del hallazgo': 'Finding detail',
   'El nombre es obligatorio.': 'A name is required.',
   'Investigación no encontrada.': 'Investigation not found.',
   'Volver a investigaciones': 'Back to investigations',
@@ -1143,7 +1156,6 @@ export const EN: Record<string, string> = {
   'Exportar SVG': 'Export SVG',
   'Fallo local consultando el estado de la sesión (IPC): {err}': 'Local failure querying session state (IPC): {err}',
   'Fin': 'End',
-  'Fuente': 'Source',
   'Fuentes': 'Sources',
   'Fuentes ({count})': 'Sources ({count})',
   'Gate 3 solo admite ASN o país ISO alpha-2 — los prefijos quedan fuera de v1.3.': 'Gate 3 accepts only ASN or ISO alpha-2 country — prefixes are out of scope for v1.3.',
@@ -1278,7 +1290,6 @@ export const EN: Record<string, string> = {
   'Área preparada para presentar el resultado de una consulta y sus estados. No se simula ningún resultado en esta versión.':
     'Area prepared to present a query result and its states. No result is simulated in this version.',
   'preparado': 'prepared',
-  'Procedencia': 'Provenance',
   'Cada resultado exitoso llevará su procedencia. El endpoint se mostrará saneado y nunca se muestran tokens ni credenciales.':
     'Every successful result will carry its provenance. The endpoint is shown sanitized and tokens or credentials are never displayed.',
   'Errores contemplados': 'Handled errors',

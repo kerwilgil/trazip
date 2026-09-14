@@ -14,9 +14,11 @@ export namespace api {
 	    lat?: number;
 	    lon?: number;
 	    netClass?: netclass.Match;
+	
 	    static createFrom(source: any = {}) {
 	        return new AddrReport(source);
 	    }
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.addr = source["addr"];
@@ -32,6 +34,38 @@ export namespace api {
 	        this.lat = source["lat"];
 	        this.lon = source["lon"];
 	        this.netClass = this.convertValues(source["netClass"], netclass.Match);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class BGPAddInput {
+	    overview?: bgp.Overview;
+	    security?: bgp.SecurityResult;
+	
+	    static createFrom(source: any = {}) {
+	        return new BGPAddInput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.overview = this.convertValues(source["overview"], bgp.Overview);
+	        this.security = this.convertValues(source["security"], bgp.SecurityResult);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -308,6 +342,48 @@ export namespace api {
 		    return a;
 		}
 	}
+	export class InvestigationEnrichResult {
+	    investigationId: string;
+	    investigationName: string;
+	    findings: osint.Finding[];
+	    correlations: osint.FindingCorrelation[];
+	    evidence: Record<string, Array<osint.FindingEvidence>>;
+	    entryMapping: Record<string, string>;
+	    stats: investigation.EnrichmentStats;
+	
+	    static createFrom(source: any = {}) {
+	        return new InvestigationEnrichResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.investigationId = source["investigationId"];
+	        this.investigationName = source["investigationName"];
+	        this.findings = this.convertValues(source["findings"], osint.Finding);
+	        this.correlations = this.convertValues(source["correlations"], osint.FindingCorrelation);
+	        this.evidence = this.convertValues(source["evidence"], Array<osint.FindingEvidence>, true);
+	        this.entryMapping = source["entryMapping"];
+	        this.stats = this.convertValues(source["stats"], investigation.EnrichmentStats);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class MonitorTargetInfo {
 	    target: monitor.Target;
 	    running: boolean;
@@ -339,6 +415,30 @@ export namespace api {
 		    }
 		    return a;
 		}
+	}
+	export class OSINTProviderInfo {
+	    id: string;
+	    name: string;
+	    capabilities: string[];
+	    activityClass: string;
+	    disclosureClass: string;
+	    requiresScope: boolean;
+	    rateLimit?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new OSINTProviderInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.capabilities = source["capabilities"];
+	        this.activityClass = source["activityClass"];
+	        this.disclosureClass = source["disclosureClass"];
+	        this.requiresScope = source["requiresScope"];
+	        this.rateLimit = source["rateLimit"];
+	    }
 	}
 	export class PassiveOSINTResult {
 	    input: string;
@@ -384,30 +484,6 @@ export namespace api {
 		    return a;
 		}
 	}
-	export class OSINTProviderInfo {
-	    id: string;
-	    name: string;
-	    capabilities: string[];
-	    activityClass: string;
-	    disclosureClass: string;
-	    requiresScope: boolean;
-	    rateLimit?: string;
-
-	    static createFrom(source: any = {}) {
-	        return new OSINTProviderInfo(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.name = source["name"];
-	        this.capabilities = source["capabilities"];
-	        this.activityClass = source["activityClass"];
-	        this.disclosureClass = source["disclosureClass"];
-	        this.requiresScope = source["requiresScope"];
-	        this.rateLimit = source["rateLimit"];
-	    }
-	}
 	export class TalkerRow {
 	    key: string;
 	    label: string;
@@ -416,7 +492,7 @@ export namespace api {
 	    country?: string;
 	    asn?: number;
 	    org?: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new TalkerRow(source);
 	    }
@@ -2832,6 +2908,24 @@ export namespace httpintel {
 
 export namespace investigation {
 	
+	export class EnrichmentStats {
+	    totalFindings: number;
+	    totalCorrelations: number;
+	    totalEvidence: number;
+	    bySourceKind: Record<string, number>;
+	
+	    static createFrom(source: any = {}) {
+	        return new EnrichmentStats(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.totalFindings = source["totalFindings"];
+	        this.totalCorrelations = source["totalCorrelations"];
+	        this.totalEvidence = source["totalEvidence"];
+	        this.bySourceKind = source["bySourceKind"];
+	    }
+	}
 	export class Entry {
 	    id: string;
 	    addedAt: string;
@@ -4136,6 +4230,99 @@ export namespace netdiag {
 		    }
 		    return a;
 		}
+	}
+
+}
+
+export namespace osint {
+	
+	export class Finding {
+	    id: string;
+	    subject: string;
+	    kind: string;
+	    evidenceClass: number;
+	    provenanceRef: string;
+	    sourceRefs: string[];
+	    attributes: Record<string, string>;
+	    summary: string;
+	    createdAt: string;
+	    updatedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Finding(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.subject = source["subject"];
+	        this.kind = source["kind"];
+	        this.evidenceClass = source["evidenceClass"];
+	        this.provenanceRef = source["provenanceRef"];
+	        this.sourceRefs = source["sourceRefs"];
+	        this.attributes = source["attributes"];
+	        this.summary = source["summary"];
+	        this.createdAt = source["createdAt"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	}
+	export class FindingCorrelation {
+	    id: string;
+	    from: string;
+	    to: string;
+	    kind: string;
+	    directed: boolean;
+	    evidenceClass: number;
+	    provenanceRef: string;
+	    label: string;
+	    createdAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FindingCorrelation(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.from = source["from"];
+	        this.to = source["to"];
+	        this.kind = source["kind"];
+	        this.directed = source["directed"];
+	        this.evidenceClass = source["evidenceClass"];
+	        this.provenanceRef = source["provenanceRef"];
+	        this.label = source["label"];
+	        this.createdAt = source["createdAt"];
+	    }
+	}
+	export class FindingEvidence {
+	    id: string;
+	    findingId: string;
+	    type: string;
+	    value: string;
+	    source: string;
+	    provenanceRef: string;
+	    evidenceClass: number;
+	    confidence: string;
+	    explain: string;
+	    timestamp: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FindingEvidence(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.findingId = source["findingId"];
+	        this.type = source["type"];
+	        this.value = source["value"];
+	        this.source = source["source"];
+	        this.provenanceRef = source["provenanceRef"];
+	        this.evidenceClass = source["evidenceClass"];
+	        this.confidence = source["confidence"];
+	        this.explain = source["explain"];
+	        this.timestamp = source["timestamp"];
+	    }
 	}
 
 }
@@ -6066,9 +6253,11 @@ export namespace webintel {
 	    friendlyMessageEN: string;
 	    technicalDetail: string;
 	    retryable: boolean;
+	
 	    static createFrom(source: any = {}) {
 	        return new Error(source);
 	    }
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.code = source["code"];
@@ -6310,3 +6499,4 @@ export namespace wifi {
 	}
 
 }
+

@@ -25,10 +25,12 @@ import "trazip/internal/model"
 type SourceKind string
 
 const (
-	SourceDiagnose SourceKind = "diagnose"
-	SourcePCAP     SourceKind = "pcap"
-	SourceMonitor  SourceKind = "monitor"
-	SourceVoIP     SourceKind = "voip"
+	SourceDiagnose        SourceKind = "diagnose"
+	SourcePCAP            SourceKind = "pcap"
+	SourceMonitor         SourceKind = "monitor"
+	SourceVoIP            SourceKind = "voip"
+	SourceWebIntel        SourceKind = "webintel"
+	SourceBGPIntelligence SourceKind = "bgp_intelligence"
 )
 
 // SnapshotSchemaVersion is Snapshot's own JSON schema version — bumped only
