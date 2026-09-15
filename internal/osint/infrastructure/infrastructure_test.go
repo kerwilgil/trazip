@@ -1222,39 +1222,51 @@ func TestQueryBounds(t *testing.T) {
 	
 	// Empty query should be rejected at provider level
 	// Test inferBBoxFromQuery returns empty for unbounded queries
-	bbox, err := inferBBoxFromQuery(ctx, "random text without bounds")
+	bbox, spec, err := inferBBoxFromQuery(ctx, "random text without bounds")
 	if err != nil {
 		t.Fatalf("inferBBoxFromQuery failed: %v", err)
 	}
 	if bbox != "" {
 		t.Errorf("unbounded query should return empty bbox, got: %s", bbox)
 	}
+	if spec.Type != QueryTypeUnknown {
+		t.Errorf("unbounded query should have QueryTypeUnknown, got: %v", spec.Type)
+	}
 
 	// Explicit bbox should work
-	bbox, err = inferBBoxFromQuery(ctx, "bbox:10,20,30,40")
+	bbox, spec, err = inferBBoxFromQuery(ctx, "bbox:10,20,30,40")
 	if err != nil {
 		t.Fatalf("inferBBoxFromQuery failed for bbox: %v", err)
 	}
 	if bbox != "10,20,30,40" {
 		t.Errorf("bbox parse failed: %s", bbox)
 	}
+	if spec.Type != QueryTypeBBox {
+		t.Errorf("bbox query should have QueryTypeBBox, got: %v", spec.Type)
+	}
 
 	// Country code should work
-	bbox, err = inferBBoxFromQuery(ctx, "country:US")
+	bbox, spec, err = inferBBoxFromQuery(ctx, "country:US")
 	if err != nil {
 		t.Fatalf("inferBBoxFromQuery failed for country: %v", err)
 	}
 	if bbox == "" {
 		t.Errorf("country:US should return bbox")
 	}
+	if spec.Type != QueryTypeCountry || spec.Country != "US" {
+		t.Errorf("country query should have QueryTypeCountry with US, got: %v, %v", spec.Type, spec.Country)
+	}
 
 	// City should work
-	bbox, err = inferBBoxFromQuery(ctx, "city:Madrid,ES")
+	bbox, spec, err = inferBBoxFromQuery(ctx, "city:Madrid,ES")
 	if err != nil {
 		t.Fatalf("inferBBoxFromQuery failed for city: %v", err)
 	}
 	if bbox == "" {
 		t.Errorf("city:Madrid,ES should return bbox")
+	}
+	if spec.Type != QueryTypeCity || spec.City != "Madrid" || spec.Country != "ES" {
+		t.Errorf("city query should have QueryTypeCity with Madrid,ES, got: %v, %v, %v", spec.Type, spec.City, spec.Country)
 	}
 }
 
@@ -1686,7 +1698,7 @@ func TestQueryFormats(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
-			bbox, err := inferBBoxFromQuery(ctx, tt.query)
+			bbox, _, err := inferBBoxFromQuery(ctx, tt.query)
 			if tt.wantErr {
 				if err == nil {
 					t.Errorf("expected error for query %q, got nil", tt.query)
@@ -2207,5 +2219,178 @@ func TestNewSourceError(t *testing.T) {
 	}
 	if !strings.Contains(se2.Message, "***") {
 		t.Errorf("Message should contain redacted marker: %q", se2.Message)
+	}
+}
+
+// TestQuerySemanticsEndToEnd tests that query semantics work correctly end-to-end
+// using httptest servers to simulate OSM and PeeringDB responses.
+func TestQuerySemanticsEndToEnd(t *testing.T) {
+	tests := []struct {
+		name           string
+		query          string
+		setupOSM       func(*testing.T) *httptest.Server
+		setupPeeringDB func(*testing.T) *httptest.Server
+		checkResults   func(*testing.T, *InfrastructureCollection)
+	}{
+		{
+			name: "country:ES query filters by country code exactly",
+			query: "country:ES",
+			setupOSM: func(t *testing.T) *httptest.Server {
+				return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					// Should receive bbox for Spain
+					t.Logf("OSM request: %s", r.URL.String())
+					w.WriteHeader(http.StatusOK)
+					// Return IXP in Spain and one in France - only Spain should be kept
+					w.Write([]byte(`{"version":0.6,"generator":"test","elements":[
+						{"type":"node","id":1,"lat":40.41,"lon":-3.70,"tags":{"name":"IXP-Madrid","internet_exchange_point":"yes","city":"Madrid","country":"ES"}},
+						{"type":"node","id":2,"lat":48.85,"lon":2.35,"tags":{"name":"IXP-Paris","internet_exchange_point":"yes","city":"Paris","country":"FR"}}
+					]}`))
+				}) )
+			},
+			setupPeeringDB: func(t *testing.T) *httptest.Server {
+				return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte(`{"data":[],"meta":{"limit":1000,"offset":0,"total":0}}`))
+				}))
+			},
+			checkResults: func(t *testing.T, coll *InfrastructureCollection) {
+				// Should only have IXP from Spain, not France
+				if len(coll.IXPs) != 1 {
+					t.Errorf("expected 1 IXP from Spain, got %d", len(coll.IXPs))
+				}
+				if len(coll.IXPs) > 0 && coll.IXPs[0].Country != "ES" {
+					t.Errorf("expected IXP country ES, got %s", coll.IXPs[0].Country)
+				}
+			},
+		},
+		{
+			name: "city:Madrid,ES query filters by city and country exactly",
+			query: "city:Madrid,ES",
+			setupOSM: func(t *testing.T) *httptest.Server {
+				return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					t.Logf("OSM request: %s", r.URL.String())
+					w.WriteHeader(http.StatusOK)
+					// Return facilities in Madrid,ES and Madrid,US - only Madrid,ES should be kept
+					w.Write([]byte(`{"version":0.6,"generator":"test","elements":[
+						{"type":"node","id":10,"lat":40.41,"lon":-3.70,"tags":{"name":"Facility-Madrid-ES","building":"data_center","city":"Madrid","country":"ES"}},
+						{"type":"node","id":11,"lat":40.41,"lon":-3.70,"tags":{"name":"Facility-Madrid-US","building":"data_center","city":"Madrid","country":"US"}}
+					]}`))
+				}) )
+			},
+			setupPeeringDB: func(t *testing.T) *httptest.Server {
+				return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte(`{"data":[],"meta":{"limit":1000,"offset":0,"total":0}}`))
+				}))
+			},
+			checkResults: func(t *testing.T, coll *InfrastructureCollection) {
+				// Should only have facility from Madrid,ES
+				if len(coll.Facilities) != 1 {
+					t.Errorf("expected 1 facility from Madrid,ES, got %d", len(coll.Facilities))
+				}
+				if len(coll.Facilities) > 0 && (coll.Facilities[0].City != "Madrid" || coll.Facilities[0].Country != "ES") {
+					t.Errorf("expected facility in Madrid,ES, got %s,%s", coll.Facilities[0].City, coll.Facilities[0].Country)
+				}
+			},
+		},
+		{
+			name: "bbox query does no additional textual filtering",
+			query: "bbox:36.0,-9.3,43.79,3.3", // Spain bbox
+			setupOSM: func(t *testing.T) *httptest.Server {
+				return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					t.Logf("OSM request: %s", r.URL.String())
+					w.WriteHeader(http.StatusOK)
+					// Return landing stations - spatial query already filtered by bbox
+					w.Write([]byte(`{"version":0.6,"generator":"test","elements":[
+						{"type":"node","id":20,"lat":40.41,"lon":-3.70,"tags":{"name":"LS-Madrid","telecom":"cable_landing_station","city":"Madrid","country":"ES"}}
+					]}`))
+				}) )
+			},
+			setupPeeringDB: func(t *testing.T) *httptest.Server {
+				return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte(`{"data":[],"meta":{"limit":1000,"offset":0,"total":0}}`))
+				}))
+			},
+			checkResults: func(t *testing.T, coll *InfrastructureCollection) {
+				// Should have the landing station from the bbox query
+				if len(coll.LandingStations) != 1 {
+					t.Errorf("expected 1 landing station from bbox, got %d", len(coll.LandingStations))
+				}
+			},
+		},
+		{
+			name: "submarine cables not filtered by country/bbox textual matching",
+			query: "country:ES",
+			setupOSM: func(t *testing.T) *httptest.Server {
+				return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					t.Logf("OSM request: %s", r.URL.String())
+					w.WriteHeader(http.StatusOK)
+					// Return submarine cable - should be accepted since spatial query already filtered
+					w.Write([]byte(`{"version":0.6,"generator":"test","elements":[
+						{"type":"way","id":30,"tags":{"name":"CABLE-MED","communication":"line","location":"underwater"}}
+					]}`))
+				}) )
+			},
+			setupPeeringDB: func(t *testing.T) *httptest.Server {
+				return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte(`{"data":[],"meta":{"limit":1000,"offset":0,"total":0}}`))
+				}))
+			},
+			checkResults: func(t *testing.T, coll *InfrastructureCollection) {
+				// Should have the submarine cable (spatial query already filtered by country bbox)
+				if len(coll.SubmarineCables) != 1 {
+					t.Errorf("expected 1 submarine cable from spatial query, got %d", len(coll.SubmarineCables))
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			osmServer := tt.setupOSM(t)
+			defer osmServer.Close()
+
+			pdbServer := tt.setupPeeringDB(t)
+			defer pdbServer.Close()
+
+			cfg := InfraProviderConfig{
+				OSM: OSMConfig{
+					Timeout:    5 * time.Second,
+					RateLimit:  100,
+					BaseURL:    osmServer.URL,
+					UserAgent:  "TEST",
+				},
+				PeeringDB: PeeringDBConfig{
+					Timeout:    5 * time.Second,
+					RateLimit:  100,
+					BaseURL:    pdbServer.URL,
+					UserAgent:  "TEST",
+				},
+				Enabled: true,
+			}
+
+			provider, err := NewInfraProvider(cfg)
+			if err != nil {
+				t.Fatalf("NewInfraProvider failed: %v", err)
+			}
+			if provider == nil {
+				t.Fatal("provider is nil")
+			}
+
+			ctx := context.Background()
+			result := provider.Lookup(ctx, osint.CapabilityInfrastructure, tt.query)
+			if result.Err != nil {
+				t.Fatalf("Lookup failed: %v", result.Err)
+			}
+
+			coll, ok := result.Data.(*InfrastructureCollection)
+			if !ok {
+				t.Fatal("result data is not InfrastructureCollection")
+			}
+
+			tt.checkResults(t, coll)
+		})
 	}
 }

@@ -19,6 +19,31 @@ type InfraProvider struct {
 	pdbClient *PeeringDBClient
 }
 
+// QueryType identifies the type of query for semantic matching.
+type QueryType int
+
+const (
+	QueryTypeUnknown QueryType = iota
+	QueryTypeBBox       // bbox:s,w,n,e - no textual filtering after spatial query
+	QueryTypeCountry    // country:XX - filter by country code exactly
+	QueryTypeCity       // city:Name,CC - filter by city AND country exactly
+	QueryTypeASN        // asn:NUMBER - handled by PeeringDB directly
+	QueryTypePeeringDB  // peeringdb:TYPE:ID - direct provider lookup
+	QueryTypeOSM        // osm:TYPE/ID - direct OSM lookup
+)
+
+// QuerySpec holds the parsed query specification for semantic matching.
+type QuerySpec struct {
+	Type       QueryType
+	Country    string // ISO alpha-2 for country/city queries
+	City       string // City name for city queries
+	RawQuery   string // Original query string
+}
+
+func (q QuerySpec) IsCountryQuery() bool { return q.Type == QueryTypeCountry }
+func (q QuerySpec) IsCityQuery() bool    { return q.Type == QueryTypeCity }
+func (q QuerySpec) IsBBoxQuery() bool    { return q.Type == QueryTypeBBox }
+
 // InfraProviderConfig configures the infrastructure provider.
 type InfraProviderConfig struct {
 	OSM       OSMConfig
@@ -142,7 +167,7 @@ func (p *InfraProvider) lookupIXP(ctx context.Context, input any, baseProv osint
 		coll.Provenance = append(coll.Provenance, prov)
 	} else {
 		// Search via OSM with bounded query
-		bbox, err := inferBBoxFromQuery(ctx, query)
+		bbox, spec, err := inferBBoxFromQuery(ctx, query)
 		if err != nil {
 			return osint.Result{Err: fmt.Errorf("bbox inference failed: %w", err)}
 		}
@@ -158,7 +183,7 @@ func (p *InfraProvider) lookupIXP(ctx context.Context, input any, baseProv osint
 			if err != nil {
 				continue // Skip invalid elements
 			}
-			if matchesQuery(ixp.Name, ixp.City, ixp.Country, query) {
+			if matchesQuerySemantic(ixp.Name, ixp.City, ixp.Country, spec) {
 				coll.IXPs = append(coll.IXPs, ixp)
 				coll.Provenance = append(coll.Provenance, ProvenanceFor(p.MetaVal, osint.CapabilityIXP, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
 			}
@@ -234,7 +259,7 @@ func (p *InfraProvider) lookupFacility(ctx context.Context, input any, baseProv 
 		coll.Facilities = append(coll.Facilities, f)
 		coll.Provenance = append(coll.Provenance, prov)
 	} else {
-		bbox, err := inferBBoxFromQuery(ctx, query)
+		bbox, spec, err := inferBBoxFromQuery(ctx, query)
 		if err != nil {
 			return osint.Result{Err: fmt.Errorf("bbox inference failed: %w", err)}
 		}
@@ -250,7 +275,7 @@ func (p *InfraProvider) lookupFacility(ctx context.Context, input any, baseProv 
 			if err != nil {
 				continue
 			}
-			if matchesQuery(fac.Name, fac.City, fac.Country, query) {
+			if matchesQuerySemantic(fac.Name, fac.City, fac.Country, spec) {
 				coll.Facilities = append(coll.Facilities, fac)
 				coll.Provenance = append(coll.Provenance, ProvenanceFor(p.MetaVal, osint.CapabilityFacility, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
 			}
@@ -300,7 +325,7 @@ func (p *InfraProvider) lookupLandingStation(ctx context.Context, input any, bas
 			}
 		}
 	} else {
-		bbox, err := inferBBoxFromQuery(ctx, query)
+		bbox, spec, err := inferBBoxFromQuery(ctx, query)
 		if err != nil {
 			return osint.Result{Err: fmt.Errorf("bbox inference failed: %w", err)}
 		}
@@ -317,7 +342,7 @@ func (p *InfraProvider) lookupLandingStation(ctx context.Context, input any, bas
 			if err != nil {
 				continue
 			}
-			if matchesQuery(ls.Name, ls.City, ls.Country, query) {
+			if matchesQuerySemantic(ls.Name, ls.City, ls.Country, spec) {
 				coll.LandingStations = append(coll.LandingStations, ls)
 				coll.Provenance = append(coll.Provenance, ProvenanceFor(p.MetaVal, osint.CapabilityLandingStation, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
 			}
@@ -367,7 +392,7 @@ func (p *InfraProvider) lookupSubmarineCable(ctx context.Context, input any, bas
 			}
 		}
 	} else {
-		bbox, err := inferBBoxFromQuery(ctx, query)
+		bbox, spec, err := inferBBoxFromQuery(ctx, query)
 		if err != nil {
 			return osint.Result{Err: fmt.Errorf("bbox inference failed: %w", err)}
 		}
@@ -384,7 +409,14 @@ func (p *InfraProvider) lookupSubmarineCable(ctx context.Context, input any, bas
 			if err != nil {
 				continue
 			}
-			if matchesQuery(cable.Name, "", "", query) {
+			// Submarine cables: NO textual filtering by country/bbox - spatial query already did the work
+			if spec.Type == QueryTypeUnknown || spec.Type == QueryTypeASN || spec.Type == QueryTypePeeringDB {
+				if matchesQuerySemantic(cable.Name, "", "", spec) {
+					coll.SubmarineCables = append(coll.SubmarineCables, cable)
+					coll.Provenance = append(coll.Provenance, ProvenanceFor(p.MetaVal, osint.CapabilitySubmarineCable, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
+				}
+			} else {
+				// For country/city/bbox queries, spatial query already filtered - accept all
 				coll.SubmarineCables = append(coll.SubmarineCables, cable)
 				coll.Provenance = append(coll.Provenance, ProvenanceFor(p.MetaVal, osint.CapabilitySubmarineCable, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
 			}
@@ -481,7 +513,7 @@ coll := &InfrastructureCollection{}
 	}
 
 	// For comprehensive search, we do multiple targeted searches with bounded queries
-	bbox, err := inferBBoxFromQuery(ctx, query)
+	bbox, spec, err := inferBBoxFromQuery(ctx, query)
 	if err != nil {
 		return osint.Result{Err: fmt.Errorf("bbox inference failed: %w", err)}
 	}
@@ -499,7 +531,7 @@ coll := &InfrastructureCollection{}
 		if err != nil {
 			continue
 		}
-		if matchesQuery(ixp.Name, ixp.City, ixp.Country, query) {
+		if matchesQuerySemantic(ixp.Name, ixp.City, ixp.Country, spec) {
 			coll.IXPs = append(coll.IXPs, ixp)
 			coll.Provenance = append(coll.Provenance, ProvenanceFor(p.MetaVal, osint.CapabilityIXP, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
 		}
@@ -515,7 +547,7 @@ coll := &InfrastructureCollection{}
 		if err != nil {
 			continue
 		}
-		if matchesQuery(fac.Name, fac.City, fac.Country, query) {
+		if matchesQuerySemantic(fac.Name, fac.City, fac.Country, spec) {
 			coll.Facilities = append(coll.Facilities, fac)
 			coll.Provenance = append(coll.Provenance, ProvenanceFor(p.MetaVal, osint.CapabilityFacility, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
 		}
@@ -531,13 +563,13 @@ coll := &InfrastructureCollection{}
 		if err != nil {
 			continue
 		}
-		if matchesQuery(ls.Name, ls.City, ls.Country, query) {
+		if matchesQuerySemantic(ls.Name, ls.City, ls.Country, spec) {
 			coll.LandingStations = append(coll.LandingStations, ls)
 			coll.Provenance = append(coll.Provenance, ProvenanceFor(p.MetaVal, osint.CapabilityLandingStation, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
 		}
 	}
 
-	// Search submarine cables (using same bbox)
+	// Search submarine cables (using same bbox) - NO textual filtering by country/bbox
 	resp, err = p.osmClient.QueryOSM(ctx, SubmarineCableQuery(bbox))
 	if err != nil {
 		return osint.Result{Err: fmt.Errorf("osm submarine_cable query: %w", err)}
@@ -547,7 +579,15 @@ coll := &InfrastructureCollection{}
 		if err != nil {
 			continue
 		}
-		if matchesQuery(cable.Name, "", "", query) {
+		// Submarine cables: NO textual filtering by country/bbox - spatial query already did the work
+		// Only filter by query if it's a name-based query (not country/city/bbox)
+		if spec.Type == QueryTypeUnknown || spec.Type == QueryTypeASN || spec.Type == QueryTypePeeringDB {
+			if matchesQuerySemantic(cable.Name, "", "", spec) {
+				coll.SubmarineCables = append(coll.SubmarineCables, cable)
+				coll.Provenance = append(coll.Provenance, ProvenanceFor(p.MetaVal, osint.CapabilitySubmarineCable, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
+			}
+		} else {
+			// For country/city/bbox queries, spatial query already filtered - accept all
 			coll.SubmarineCables = append(coll.SubmarineCables, cable)
 			coll.Provenance = append(coll.Provenance, ProvenanceFor(p.MetaVal, osint.CapabilitySubmarineCable, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
 		}
@@ -796,6 +836,36 @@ func parseASN(s string) int {
 
 // extractSearchTerms extracts the actual search terms from a formatted query.
 // Handles formats like: country:CC, city:City,CC, bbox:..., asn:N, peeringdb:..., osm:...
+// matchesQuerySemantic performs semantic matching based on the query type.
+// For bbox queries: no additional textual filtering (spatial query already did the work).
+// For country queries: filter by exact country code match.
+// For city queries: filter by exact city name AND country code match.
+// For other queries: fallback to substring matching on name/city/country.
+func matchesQuerySemantic(name, city, country string, spec QuerySpec) bool {
+	switch spec.Type {
+	case QueryTypeBBox:
+		// BBox queries: spatial query already filtered, no additional textual filtering
+		return true
+	case QueryTypeCountry:
+		// Country queries: exact country code match
+		return strings.EqualFold(country, spec.Country)
+	case QueryTypeCity:
+		// City queries: exact city name AND country code match
+		return strings.EqualFold(city, spec.City) && strings.EqualFold(country, spec.Country)
+	default:
+		// Fallback: substring matching on name/city/country (legacy behavior)
+		searchTerm := extractSearchTerms(spec.RawQuery)
+		if searchTerm == "" {
+			return true
+		}
+		q := strings.ToLower(searchTerm)
+		haystack := strings.ToLower(name + " " + city + " " + country)
+		return strings.Contains(haystack, q)
+	}
+}
+
+// extractSearchTerms extracts the actual search terms from a formatted query.
+// Handles formats like: country:CC, city:City,CC, bbox:..., asn:N, peeringdb:..., osm:...
 func extractSearchTerms(query string) string {
 	q := strings.TrimSpace(query)
 	if q == "" {
@@ -814,40 +884,26 @@ func extractSearchTerms(query string) string {
 	// No recognized prefix, return as-is
 	return q
 }
-
-func matchesQuery(name, city, country, query string) bool {
-	searchTerm := extractSearchTerms(query)
-	if searchTerm == "" {
-		return true
-	}
-	q := strings.ToLower(searchTerm)
-	haystack := strings.ToLower(name + " " + city + " " + country)
-	return strings.Contains(haystack, q)
-}
-
-// inferBBoxFromQuery infers a bounding box from the query string.
-// Supports explicit bbox (south,west,north,east), country codes (ISO alpha-2), and city names.
-// Returns empty string if the query cannot be bounded - caller should reject.
-func inferBBoxFromQuery(ctx context.Context, query string) (string, error) {
+func parseQuerySpec(query string) (QuerySpec, error) {
 	q := strings.TrimSpace(query)
 	if q == "" {
-		return "", nil
+		return QuerySpec{Type: QueryTypeUnknown, RawQuery: query}, nil
 	}
 
 	// Explicit bbox: "south,west,north,east" or "bbox:south,west,north,east"
 	if strings.HasPrefix(q, "bbox:") {
 		bbox := strings.TrimPrefix(q, "bbox:")
 		parts := strings.Split(bbox, ",")
-		if len(parts) == 4 {
-			// Validate numeric
-			for _, p := range parts {
-				if _, err := fmt.Sscanf(strings.TrimSpace(p), "%f", new(float64)); err != nil {
-					return "", fmt.Errorf("invalid bbox coordinate: %s", p)
-				}
-			}
-			return bbox, nil
+		if len(parts) != 4 {
+			return QuerySpec{}, fmt.Errorf("invalid bbox format, expected 'south,west,north,east'")
 		}
-		return "", fmt.Errorf("invalid bbox format, expected 'south,west,north,east'")
+		// Validate numeric
+		for _, p := range parts {
+			if _, err := fmt.Sscanf(strings.TrimSpace(p), "%f", new(float64)); err != nil {
+				return QuerySpec{}, fmt.Errorf("invalid bbox coordinate: %s", p)
+			}
+		}
+		return QuerySpec{Type: QueryTypeBBox, RawQuery: query}, nil
 	}
 
 	// Check for "country:XX" or "cc:XX" pattern (ISO alpha-2)
@@ -857,14 +913,80 @@ func inferBBoxFromQuery(ctx context.Context, query string) (string, error) {
 			prefix = "cc:"
 		}
 		cc := strings.ToUpper(strings.TrimPrefix(q, prefix))
-		if len(cc) == 2 {
-			// Return country-level bbox from a predefined map
-			if bbox, ok := countryBBox[cc]; ok {
-				return bbox, nil
-			}
-			return "", fmt.Errorf("unsupported country code: %s", cc)
+		if len(cc) != 2 {
+			return QuerySpec{}, fmt.Errorf("invalid country code format, expected ISO alpha-2")
 		}
-		return "", fmt.Errorf("invalid country code format, expected ISO alpha-2")
+		if _, ok := countryBBox[cc]; !ok {
+			return QuerySpec{}, fmt.Errorf("unsupported country code: %s", cc)
+		}
+		return QuerySpec{Type: QueryTypeCountry, Country: cc, RawQuery: query}, nil
+	}
+
+	// Check for "city:Name,CC" pattern
+	if strings.HasPrefix(q, "city:") {
+		citySpec := strings.TrimPrefix(q, "city:")
+		parts := strings.Split(citySpec, ",")
+		if len(parts) != 2 {
+			return QuerySpec{}, fmt.Errorf("invalid city format, expected 'city:CityName,CC'")
+		}
+		city := strings.TrimSpace(parts[0])
+		cc := strings.ToUpper(strings.TrimSpace(parts[1]))
+		if len(cc) != 2 {
+			return QuerySpec{}, fmt.Errorf("invalid country code format, expected ISO alpha-2")
+		}
+		if _, ok := cityBBox[cc+":"+city]; !ok {
+			// Fallback to country bbox is handled by caller
+			if _, ok := countryBBox[cc]; !ok {
+				return QuerySpec{}, fmt.Errorf("unsupported city: %s, %s", city, cc)
+			}
+		}
+		return QuerySpec{Type: QueryTypeCity, City: city, Country: cc, RawQuery: query}, nil
+	}
+
+	// Check for "asn:NUMBER" pattern - for ASN-based lookups we use PeeringDB directly
+	if strings.HasPrefix(q, "asn:") {
+		return QuerySpec{Type: QueryTypeASN, RawQuery: query}, nil
+	}
+
+	// Check for "peeringdb:ix:NUMBER" or similar explicit provider IDs
+	if strings.HasPrefix(q, "peeringdb:") || strings.HasPrefix(q, "osm:") {
+		return QuerySpec{Type: QueryTypePeeringDB, RawQuery: query}, nil
+	}
+
+	// No recognized prefix - treat as unknown
+	return QuerySpec{Type: QueryTypeUnknown, RawQuery: query}, nil
+}
+
+// inferBBoxFromQuery infers a bounding box from the query string.
+// Returns the bbox string and the parsed QuerySpec.
+func inferBBoxFromQuery(ctx context.Context, query string) (string, QuerySpec, error) {
+	spec, err := parseQuerySpec(query)
+	if err != nil {
+		return "", QuerySpec{}, err
+	}
+
+	q := strings.TrimSpace(query)
+	if q == "" {
+		return "", spec, nil
+	}
+
+	// Explicit bbox: "south,west,north,east" or "bbox:south,west,north,east"
+	if strings.HasPrefix(q, "bbox:") {
+		bbox := strings.TrimPrefix(q, "bbox:")
+		return bbox, spec, nil
+	}
+
+	// Check for "country:XX" or "cc:XX" pattern (ISO alpha-2)
+	if strings.HasPrefix(q, "country:") || strings.HasPrefix(q, "cc:") {
+		prefix := "country:"
+		if strings.HasPrefix(q, "cc:") {
+			prefix = "cc:"
+		}
+		cc := strings.ToUpper(strings.TrimPrefix(q, prefix))
+		if bbox, ok := countryBBox[cc]; ok {
+			return bbox, spec, nil
+		}
+		return "", spec, fmt.Errorf("unsupported country code: %s", cc)
 	}
 
 	// Check for "city:Name,CC" pattern
@@ -875,29 +997,29 @@ func inferBBoxFromQuery(ctx context.Context, query string) (string, error) {
 			city := strings.TrimSpace(parts[0])
 			cc := strings.ToUpper(strings.TrimSpace(parts[1]))
 			if bbox, ok := cityBBox[cc+":"+city]; ok {
-				return bbox, nil
+				return bbox, spec, nil
 			}
 			// Fallback to country bbox
 			if bbox, ok := countryBBox[cc]; ok {
-				return bbox, nil
+				return bbox, spec, nil
 			}
-			return "", fmt.Errorf("unsupported city: %s, %s", city, cc)
+			return "", spec, fmt.Errorf("unsupported city: %s, %s", city, cc)
 		}
-		return "", fmt.Errorf("invalid city format, expected 'city:CityName,CC'")
+		return "", spec, fmt.Errorf("invalid city format, expected 'city:CityName,CC'")
 	}
 
 	// Check for "asn:NUMBER" pattern - for ASN-based lookups we use PeeringDB directly
 	if strings.HasPrefix(q, "asn:") {
-		return "", nil // Signal to use PeeringDB
+		return "", spec, nil // Signal to use PeeringDB
 	}
 
 	// Check for "peeringdb:ix:NUMBER" or similar explicit provider IDs
 	if strings.HasPrefix(q, "peeringdb:") || strings.HasPrefix(q, "osm:") {
-		return "", nil // Signal to use direct provider lookup
+		return "", spec, nil // Signal to use direct provider lookup
 	}
 
 	// No bounded query - reject global search
-	return "", nil
+	return "", spec, nil
 }
 
 // countryBBox provides country-level bounding boxes for major countries.
