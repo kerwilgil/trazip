@@ -95,8 +95,39 @@ func (p *InfraProvider) lookupIXP(ctx context.Context, input any, baseProv osint
 
 	coll := &InfrastructureCollection{}
 
-	// Try PeeringDB first if query looks like an ID
-	if id := parseID(query); id > 0 {
+	// Check for peeringdb:ix:NUMBER format - direct PeeringDB IXP lookup
+	if pdbType, id, ok := parsePeeringDBQuery(query); ok && pdbType == "ix" {
+		ixp, err := p.pdbClient.GetIXP(ctx, id)
+		if err != nil {
+			return osint.Result{Err: fmt.Errorf("peeringdb ixp lookup: %w", err)}
+		}
+		prov := ProvenanceFor(p.MetaVal, osint.CapabilityIXP, fmt.Sprintf("peeringdb:ix:%d", id))
+		i, err := ConvertPeeringDBIXP(ixp, prov)
+		if err != nil {
+			return osint.Result{Err: fmt.Errorf("convert peeringdb ixp: %w", err)}
+		}
+		coll.IXPs = append(coll.IXPs, i)
+		coll.Provenance = append(coll.Provenance, prov)
+	} else if osmType, osmID, ok := parseOSMQuery(query); ok && (osmType == "node" || osmType == "way" || osmType == "relation") {
+		// Direct OSM element lookup
+		prov := ProvenanceFor(p.MetaVal, osint.CapabilityIXP, fmt.Sprintf("osm:%s/%d", osmType, osmID))
+		resp, err := p.osmClient.QueryOSM(ctx, IXPQuery(fmt.Sprintf("[id:%d]", osmID)))
+		if err != nil {
+			return osint.Result{Err: fmt.Errorf("osm ixp direct lookup: %w", err)}
+		}
+		for _, elem := range resp.Elements {
+			if elem.Type == osmType && elem.ID == osmID {
+				ixp, err := ParseIXP(elem, ProvenanceFor(p.MetaVal, osint.CapabilityIXP, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
+				if err != nil {
+					continue
+				}
+				coll.IXPs = append(coll.IXPs, ixp)
+				coll.Provenance = append(coll.Provenance, prov)
+				break
+			}
+		}
+	} else if id := parseID(query); id > 0 {
+		// Try PeeringDB first if query looks like an ID
 		ixp, err := p.pdbClient.GetIXP(ctx, id)
 		if err != nil {
 			return osint.Result{Err: fmt.Errorf("peeringdb ixp lookup: %w", err)}
@@ -157,8 +188,39 @@ func (p *InfraProvider) lookupFacility(ctx context.Context, input any, baseProv 
 
 	coll := &InfrastructureCollection{}
 
-	// Try PeeringDB first
-	if id := parseID(query); id > 0 {
+	// Check for peeringdb:fac:NUMBER format - direct PeeringDB facility lookup
+	if pdbType, id, ok := parsePeeringDBQuery(query); ok && pdbType == "fac" {
+		fac, err := p.pdbClient.GetFacility(ctx, id)
+		if err != nil {
+			return osint.Result{Err: fmt.Errorf("peeringdb facility lookup: %w", err)}
+		}
+		prov := ProvenanceFor(p.MetaVal, osint.CapabilityFacility, fmt.Sprintf("peeringdb:fac:%d", id))
+		f, err := ConvertPeeringDBFacility(fac, prov)
+		if err != nil {
+			return osint.Result{Err: fmt.Errorf("convert peeringdb facility: %w", err)}
+		}
+		coll.Facilities = append(coll.Facilities, f)
+		coll.Provenance = append(coll.Provenance, prov)
+	} else if osmType, osmID, ok := parseOSMQuery(query); ok && (osmType == "node" || osmType == "way" || osmType == "relation") {
+		// Direct OSM element lookup
+		prov := ProvenanceFor(p.MetaVal, osint.CapabilityFacility, fmt.Sprintf("osm:%s/%d", osmType, osmID))
+		resp, err := p.osmClient.QueryOSM(ctx, FacilityQuery(fmt.Sprintf("[id:%d]", osmID)))
+		if err != nil {
+			return osint.Result{Err: fmt.Errorf("osm facility direct lookup: %w", err)}
+		}
+		for _, elem := range resp.Elements {
+			if elem.Type == osmType && elem.ID == osmID {
+				fac, err := ParseFacility(elem, ProvenanceFor(p.MetaVal, osint.CapabilityFacility, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
+				if err != nil {
+					continue
+				}
+				coll.Facilities = append(coll.Facilities, fac)
+				coll.Provenance = append(coll.Provenance, prov)
+				break
+			}
+		}
+	} else if id := parseID(query); id > 0 {
+		// Try PeeringDB first if query looks like an ID
 		fac, err := p.pdbClient.GetFacility(ctx, id)
 		if err != nil {
 			return osint.Result{Err: fmt.Errorf("peeringdb facility lookup: %w", err)}
@@ -218,26 +280,46 @@ func (p *InfraProvider) lookupLandingStation(ctx context.Context, input any, bas
 
 	coll := &InfrastructureCollection{}
 
-	bbox, err := inferBBoxFromQuery(ctx, query)
-	if err != nil {
-		return osint.Result{Err: fmt.Errorf("bbox inference failed: %w", err)}
-	}
-	if bbox == "" {
-		return osint.Result{Err: fmt.Errorf("landing_station lookup: query requires explicit location context (country, city, or bbox)")}
-	}
-
-	resp, err := p.osmClient.QueryOSM(ctx, CableLandingStationQuery(bbox))
-	if err != nil {
-		return osint.Result{Err: fmt.Errorf("osm landing_station query: %w", err)}
-	}
-	for _, elem := range resp.Elements {
-		ls, err := ParseCableLandingStation(elem, ProvenanceFor(p.MetaVal, osint.CapabilityLandingStation, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
+	// Check for osm:TYPE/ID format - direct OSM element lookup
+	if osmType, osmID, ok := parseOSMQuery(query); ok && (osmType == "node" || osmType == "way" || osmType == "relation") {
+		prov := ProvenanceFor(p.MetaVal, osint.CapabilityLandingStation, fmt.Sprintf("osm:%s/%d", osmType, osmID))
+		resp, err := p.osmClient.QueryOSM(ctx, CableLandingStationQuery(fmt.Sprintf("[id:%d]", osmID)))
 		if err != nil {
-			continue
+			return osint.Result{Err: fmt.Errorf("osm landing_station direct lookup: %w", err)}
 		}
-		if matchesQuery(ls.Name, ls.City, ls.Country, query) {
-			coll.LandingStations = append(coll.LandingStations, ls)
-			coll.Provenance = append(coll.Provenance, ProvenanceFor(p.MetaVal, osint.CapabilityLandingStation, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
+		for _, elem := range resp.Elements {
+			if elem.Type == osmType && elem.ID == osmID {
+				ls, err := ParseCableLandingStation(elem, ProvenanceFor(p.MetaVal, osint.CapabilityLandingStation, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
+				if err != nil {
+					continue
+				}
+				coll.LandingStations = append(coll.LandingStations, ls)
+				coll.Provenance = append(coll.Provenance, prov)
+				break
+			}
+		}
+	} else {
+		bbox, err := inferBBoxFromQuery(ctx, query)
+		if err != nil {
+			return osint.Result{Err: fmt.Errorf("bbox inference failed: %w", err)}
+		}
+		if bbox == "" {
+			return osint.Result{Err: fmt.Errorf("landing_station lookup: query requires explicit location context (country, city, or bbox)")}
+		}
+
+		resp, err := p.osmClient.QueryOSM(ctx, CableLandingStationQuery(bbox))
+		if err != nil {
+			return osint.Result{Err: fmt.Errorf("osm landing_station query: %w", err)}
+		}
+		for _, elem := range resp.Elements {
+			ls, err := ParseCableLandingStation(elem, ProvenanceFor(p.MetaVal, osint.CapabilityLandingStation, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
+			if err != nil {
+				continue
+			}
+			if matchesQuery(ls.Name, ls.City, ls.Country, query) {
+				coll.LandingStations = append(coll.LandingStations, ls)
+				coll.Provenance = append(coll.Provenance, ProvenanceFor(p.MetaVal, osint.CapabilityLandingStation, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
+			}
 		}
 	}
 
@@ -265,26 +347,46 @@ func (p *InfraProvider) lookupSubmarineCable(ctx context.Context, input any, bas
 
 	coll := &InfrastructureCollection{}
 
-	bbox, err := inferBBoxFromQuery(ctx, query)
-	if err != nil {
-		return osint.Result{Err: fmt.Errorf("bbox inference failed: %w", err)}
-	}
-	if bbox == "" {
-		return osint.Result{Err: fmt.Errorf("submarine_cable lookup: query requires explicit location context (country, city, or bbox)")}
-	}
-
-	resp, err := p.osmClient.QueryOSM(ctx, SubmarineCableQuery(bbox))
-	if err != nil {
-		return osint.Result{Err: fmt.Errorf("osm submarine_cable query: %w", err)}
-	}
-	for _, elem := range resp.Elements {
-		cable, err := ParseSubmarineCable(elem, ProvenanceFor(p.MetaVal, osint.CapabilitySubmarineCable, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
+	// Check for osm:TYPE/ID format - direct OSM element lookup
+	if osmType, osmID, ok := parseOSMQuery(query); ok && (osmType == "way" || osmType == "relation") {
+		prov := ProvenanceFor(p.MetaVal, osint.CapabilitySubmarineCable, fmt.Sprintf("osm:%s/%d", osmType, osmID))
+		resp, err := p.osmClient.QueryOSM(ctx, SubmarineCableQuery(fmt.Sprintf("[id:%d]", osmID)))
 		if err != nil {
-			continue
+			return osint.Result{Err: fmt.Errorf("osm submarine_cable direct lookup: %w", err)}
 		}
-		if matchesQuery(cable.Name, "", "", query) {
-			coll.SubmarineCables = append(coll.SubmarineCables, cable)
-			coll.Provenance = append(coll.Provenance, ProvenanceFor(p.MetaVal, osint.CapabilitySubmarineCable, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
+		for _, elem := range resp.Elements {
+			if elem.Type == osmType && elem.ID == osmID {
+				cable, err := ParseSubmarineCable(elem, ProvenanceFor(p.MetaVal, osint.CapabilitySubmarineCable, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
+				if err != nil {
+					continue
+				}
+				coll.SubmarineCables = append(coll.SubmarineCables, cable)
+				coll.Provenance = append(coll.Provenance, prov)
+				break
+			}
+		}
+	} else {
+		bbox, err := inferBBoxFromQuery(ctx, query)
+		if err != nil {
+			return osint.Result{Err: fmt.Errorf("bbox inference failed: %w", err)}
+		}
+		if bbox == "" {
+			return osint.Result{Err: fmt.Errorf("submarine_cable lookup: query requires explicit location context (country, city, or bbox)")}
+		}
+
+		resp, err := p.osmClient.QueryOSM(ctx, SubmarineCableQuery(bbox))
+		if err != nil {
+			return osint.Result{Err: fmt.Errorf("osm submarine_cable query: %w", err)}
+		}
+		for _, elem := range resp.Elements {
+			cable, err := ParseSubmarineCable(elem, ProvenanceFor(p.MetaVal, osint.CapabilitySubmarineCable, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
+			if err != nil {
+				continue
+			}
+			if matchesQuery(cable.Name, "", "", query) {
+				coll.SubmarineCables = append(coll.SubmarineCables, cable)
+				coll.Provenance = append(coll.Provenance, ProvenanceFor(p.MetaVal, osint.CapabilitySubmarineCable, fmt.Sprintf("osm:%s/%d", elem.Type, elem.ID)))
+			}
 		}
 	}
 
@@ -370,8 +472,7 @@ func (p *InfraProvider) lookupInfrastructure(ctx context.Context, input any, bas
 		}
 	}
 
-	// Search submarine cables (using same bbox as other infrastructure)
-	// SubmarineCableQuery requires a non-empty bbox - use the same one
+	// Search submarine cables (using same bbox)
 	resp, err = p.osmClient.QueryOSM(ctx, SubmarineCableQuery(bbox))
 	if err != nil {
 		return osint.Result{Err: fmt.Errorf("osm submarine_cable query: %w", err)}
@@ -388,37 +489,14 @@ func (p *InfraProvider) lookupInfrastructure(ctx context.Context, input any, bas
 	}
 
 	// Build correlations with explicit evidence
-	correlations, corrErr := p.buildCorrelations(ctx, coll, query)
+	correlations, sourceErrors := p.buildCorrelations(ctx, coll, query)
 	coll.Correlations = correlations
+	coll.SourceErrors = sourceErrors
 
 	coll.EnsureNonNil()
 	coll.Truncate(DefaultInfraBounds())
 	coll.Query = "infrastructure:" + query
 	coll.RetrievedAt = time.Now().UTC().Format(time.RFC3339)
-
-	// If correlation enrichment had errors, include them in the result provenance/warnings
-	// but don't fail the entire request - partial correlations are still valuable
-	if corrErr != nil {
-		// Add correlation enrichment warning to provenance
-		coll.Provenance = append(coll.Provenance, osint.Provenance{
-			ProviderID:      p.MetaVal.ID,
-			ProviderName:    p.MetaVal.Name,
-			Capability:      "infrastructure",
-			ActivityClass:   osint.ActivityPassive,
-			DisclosureClass: osint.DisclosurePassive,
-			RetrievedAt:     time.Now().UTC().Format(time.RFC3339),
-			Endpoint:        "infra-lookup:correlation-enrichment",
-			Confidence:      "baja",
-			Disclosure: external.Disclosure{
-				Source:      p.MetaVal.Name,
-				QueriedAt:   time.Now().UTC().Format(time.RFC3339),
-				DataSent:    "correlation enrichment",
-				CachePolicy: "none",
-				Confidence:  "baja",
-				RateLimit:   "OSM: 1 req/s (TRAZIP conservative); PeeringDB: 0.5 req/s (TRAZIP conservative)",
-			},
-		})
-	}
 
 	return osint.Result{
 		Data:       coll,
@@ -428,11 +506,30 @@ func (p *InfraProvider) lookupInfrastructure(ctx context.Context, input any, bas
 
 // buildCorrelations builds explicit correlations from infrastructure entities.
 // Only creates correlations with explicit evidence (OBSERVED from PeeringDB, POSSIBLE_CONTEXT from geographic proximity).
-// Returns correlations and any errors encountered during correlation enrichment (fail-visible).
-func (p *InfraProvider) buildCorrelations(ctx context.Context, coll *InfrastructureCollection, query string) ([]InfrastructureCorrelation, error) {
+// Returns correlations and any source errors encountered during correlation enrichment (fail-visible).
+func (p *InfraProvider) buildCorrelations(ctx context.Context, coll *InfrastructureCollection, query string) ([]InfrastructureCorrelation, []SourceError) {
 	var correlations []InfrastructureCorrelation
-	var errs []error
+	var sourceErrors []SourceError
 	retrievedAt := time.Now().UTC().Format(time.RFC3339)
+
+	// Helper to classify error type
+	classifyError := func(err error) string {
+		errStr := err.Error()
+		switch {
+		case strings.Contains(errStr, "timeout") || strings.Contains(errStr, "context deadline"):
+			return "timeout"
+		case strings.Contains(errStr, "429") || strings.Contains(errStr, "rate limited"):
+			return "rate_limit"
+		case strings.Contains(errStr, "500") || strings.Contains(errStr, "502") || strings.Contains(errStr, "503") || strings.Contains(errStr, "server error"):
+			return "server_error"
+		case strings.Contains(errStr, "decode") || strings.Contains(errStr, "unmarshal") || strings.Contains(errStr, "malformed"):
+			return "malformed"
+		case strings.Contains(errStr, "canceled") || strings.Contains(errStr, "cancelled"):
+			return "cancelled"
+		default:
+return "unknown"
+	}
+}
 
 	// ASN -> IXP correlations from PeeringDB netixlan (OBSERVED)
 	// For each IXP from PeeringDB, query netixlan for ASNs present
@@ -440,15 +537,28 @@ func (p *InfraProvider) buildCorrelations(ctx context.Context, coll *Infrastruct
 		if ixp.PeeringDBID > 0 {
 			netixlans, err := p.pdbClient.ListNetworksAtIXP(ctx, ixp.PeeringDBID)
 			if err != nil {
-				errs = append(errs, fmt.Errorf("ASN->IXP correlation for IXP %s: %w", ixp.ID, err))
+				sourceErrors = append(sourceErrors, SourceError{
+					Provider:  "peeringdb",
+					Operation: "netixlan",
+					Message:   fmt.Sprintf("ASN->IXP correlation for IXP %s: %v", ixp.ID, err),
+					ErrorType: classifyError(err),
+				})
 			} else {
 				for _, nixlan := range netixlans {
 					if nixlan.Operational {
 						prov := ProvenanceFor(p.MetaVal, osint.CapabilityInfrastructure, fmt.Sprintf("peeringdb:netixlan:%d", nixlan.ID))
 						corr, err := ConvertPeeringDBNetIXLAN(&nixlan, ixp.ID, prov)
 						if err != nil {
-							errs = append(errs, fmt.Errorf("convert ASN->IXP correlation: %w", err))
+							sourceErrors = append(sourceErrors, SourceError{
+								Provider:  "peeringdb",
+								Operation: "netixlan",
+								Message:   fmt.Sprintf("convert ASN->IXP correlation: %v", err),
+								ErrorType: classifyError(err),
+							})
 						} else {
+							corr.RetrievedAt = retrievedAt
+							// Add provenance to collection for OBSERVED correlation resolvability
+							coll.Provenance = append(coll.Provenance, prov)
 							correlations = append(correlations, corr)
 						}
 					}
@@ -484,7 +594,12 @@ func (p *InfraProvider) buildCorrelations(ctx context.Context, coll *Infrastruct
 	for asn := range asnSet {
 		netfacs, err := p.pdbClient.GetNetFacByASN(ctx, asn)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("ASN->Facility correlation for AS%d: %w", asn, err))
+			sourceErrors = append(sourceErrors, SourceError{
+				Provider:  "peeringdb",
+				Operation: "netfac",
+				Message:   fmt.Sprintf("ASN->Facility correlation for AS%d: %v", asn, err),
+				ErrorType: classifyError(err),
+			})
 		} else {
 			for _, netfac := range netfacs {
 				// Find matching facility in collection
@@ -493,8 +608,15 @@ func (p *InfraProvider) buildCorrelations(ctx context.Context, coll *Infrastruct
 						prov := ProvenanceFor(p.MetaVal, osint.CapabilityInfrastructure, fmt.Sprintf("peeringdb:netfac:%d", netfac.ID))
 						corr, err := ConvertPeeringDBNetFac(&netfac, fac.ID, asn, prov)
 						if err != nil {
-							errs = append(errs, fmt.Errorf("convert ASN->Facility correlation: %w", err))
+							sourceErrors = append(sourceErrors, SourceError{
+								Provider:  "peeringdb",
+								Operation: "netfac",
+								Message:   fmt.Sprintf("convert ASN->Facility correlation: %v", err),
+								ErrorType: classifyError(err),
+							})
 						} else {
+							// Add provenance to collection for OBSERVED correlation resolvability
+							coll.Provenance = append(coll.Provenance, prov)
 							correlations = append(correlations, corr)
 						}
 						break
@@ -510,7 +632,12 @@ func (p *InfraProvider) buildCorrelations(ctx context.Context, coll *Infrastruct
 		if fac.PeeringDBID > 0 {
 			ixpIDs, err := p.pdbClient.ListIXPsByFacility(ctx, fac.PeeringDBID)
 			if err != nil {
-				errs = append(errs, fmt.Errorf("IXP->Facility correlation for Facility %s: %w", fac.ID, err))
+				sourceErrors = append(sourceErrors, SourceError{
+					Provider:  "peeringdb",
+					Operation: "ixfac",
+					Message:   fmt.Sprintf("IXP->Facility correlation for Facility %s: %v", fac.ID, err),
+					ErrorType: classifyError(err),
+				})
 			} else {
 				for _, ixpID := range ixpIDs {
 					// Find matching IXP in collection
@@ -526,10 +653,11 @@ func (p *InfraProvider) buildCorrelations(ctx context.Context, coll *Infrastruct
 								ProvenanceRef:  fmt.Sprintf("peeringdb:ixfac:%d:%d", fac.PeeringDBID, ixpID),
 								Label:          fmt.Sprintf("IXP %s at Facility %s (PeeringDB)", ixp.Name, fac.Name),
 								Confidence:     "alta",
-								RetrievedAt:    retrievedAt,
+								RetrievedAt:    time.Now().UTC().Format(time.RFC3339),
 							}
+							// Add provenance to collection for OBSERVED correlation resolvability
+							coll.Provenance = append(coll.Provenance, prov)
 							correlations = append(correlations, corr)
-							_ = prov
 						}
 					}
 				}
@@ -537,69 +665,8 @@ func (p *InfraProvider) buildCorrelations(ctx context.Context, coll *Infrastruct
 		}
 	}
 
-	// Geographic proximity correlations (POSSIBLE_CONTEXT only)
-	// Only between co-located entities within same city
-	cityIXPs := make(map[string][]IXP)
-	for _, ixp := range coll.IXPs {
-		key := strings.ToLower(ixp.City + "," + ixp.Country)
-		cityIXPs[key] = append(cityIXPs[key], ixp)
-	}
-
-	cityFacilities := make(map[string][]Facility)
-	for _, fac := range coll.Facilities {
-		key := strings.ToLower(fac.City + "," + fac.Country)
-		cityFacilities[key] = append(cityFacilities[key], fac)
-	}
-
-	cityLandingStations := make(map[string][]LandingStation)
-	for _, ls := range coll.LandingStations {
-		key := strings.ToLower(ls.City + "," + ls.Country)
-		cityLandingStations[key] = append(cityLandingStations[key], ls)
-	}
-
-	// Correlate IXPs with Facilities in same city (POSSIBLE_CONTEXT)
-	for cityKey, ixps := range cityIXPs {
-		facilities := cityFacilities[cityKey]
-		for _, ixp := range ixps {
-			for _, fac := range facilities {
-				corr := InfrastructureCorrelation{
-					ID:             fmt.Sprintf("ctx:ixp-fac:%s:%s", ixp.ID, fac.ID),
-					NetworkEntity:  ixp.ID,
-					InfraEntity:    fac.ID,
-					RelationKind:   "ixp_near_facility",
-					EvidenceClass:  osint.EvidencePossibleContext,
-					ProvenanceRef:  fmt.Sprintf("geographic:%s", cityKey),
-					Label:          fmt.Sprintf("IXP %s and Facility %s co-located in %s", ixp.Name, fac.Name, cityKey),
-					Confidence:     "baja",
-					RetrievedAt:    retrievedAt,
-				}
-				correlations = append(correlations, corr)
-			}
-		}
-	}
-
-	// Correlate Landing Stations with Facilities in same city (POSSIBLE_CONTEXT)
-	for cityKey, lss := range cityLandingStations {
-		facilities := cityFacilities[cityKey]
-		for _, ls := range lss {
-			for _, fac := range facilities {
-				corr := InfrastructureCorrelation{
-					ID:             fmt.Sprintf("ctx:ls-fac:%s:%s", ls.ID, fac.ID),
-					NetworkEntity:  ls.ID,
-					InfraEntity:    fac.ID,
-					RelationKind:   "landing_station_near_facility",
-					EvidenceClass:  osint.EvidencePossibleContext,
-					ProvenanceRef:  fmt.Sprintf("geographic:%s", cityKey),
-					Label:          fmt.Sprintf("Landing Station %s and Facility %s co-located in %s", ls.Name, fac.Name, cityKey),
-					Confidence:     "baja",
-					RetrievedAt:    retrievedAt,
-				}
-				correlations = append(correlations, corr)
-			}
-		}
-	}
-
 	// Correlate Landing Stations with Submarine Cables (POSSIBLE_CONTEXT via cable name match)
+	// Only when there's an explicit cable name reference in the landing station tags
 	for _, ls := range coll.LandingStations {
 		for _, cable := range coll.SubmarineCables {
 			for _, lsCable := range ls.Cables {
@@ -613,7 +680,7 @@ func (p *InfraProvider) buildCorrelations(ctx context.Context, coll *Infrastruct
 						ProvenanceRef:  fmt.Sprintf("cable_name_match:%s", lsCable),
 						Label:          fmt.Sprintf("Landing Station %s associated with Cable %s", ls.Name, cable.Name),
 						Confidence:     "media",
-						RetrievedAt:    retrievedAt,
+						RetrievedAt:    time.Now().UTC().Format(time.RFC3339),
 					}
 					correlations = append(correlations, corr)
 				}
@@ -624,11 +691,7 @@ func (p *InfraProvider) buildCorrelations(ctx context.Context, coll *Infrastruct
 	// Cable -> Network Path correlations are ALWAYS NOT_PROVEN in V1.5-6
 	// We do NOT create these correlations
 
-	var finalErr error
-	if len(errs) > 0 {
-		finalErr = fmt.Errorf("correlation enrichment errors: %v", errs)
-	}
-	return correlations, finalErr
+	return correlations, sourceErrors
 }
 
 // ProvenanceFor generates provenance for a capability lookup.
@@ -659,6 +722,42 @@ func parseID(s string) int {
 	var id int
 	fmt.Sscanf(s, "%d", &id)
 	return id
+}
+
+// parsePeeringDBQuery extracts an ID from a peeringdb:TYPE:NUMBER query.
+// Returns (type, id, true) if the query matches the format, otherwise ("", 0, false).
+func parsePeeringDBQuery(s string) (string, int, bool) {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "peeringdb:") {
+		s = strings.TrimPrefix(s, "peeringdb:")
+		parts := strings.SplitN(s, ":", 2)
+		if len(parts) == 2 {
+			var id int
+			n, _ := fmt.Sscanf(parts[1], "%d", &id)
+			if n == 1 {
+				return parts[0], id, true
+			}
+		}
+	}
+	return "", 0, false
+}
+
+// parseOSMQuery extracts type and ID from an osm:TYPE/ID query.
+// Returns (type, id, true) if the query matches the format, otherwise ("", 0, false).
+func parseOSMQuery(s string) (string, int64, bool) {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "osm:") {
+		s = strings.TrimPrefix(s, "osm:")
+		parts := strings.SplitN(s, "/", 2)
+		if len(parts) == 2 {
+			var id int64
+			n, _ := fmt.Sscanf(parts[1], "%d", &id)
+			if n == 1 {
+				return parts[0], id, true
+			}
+		}
+	}
+	return "", 0, false
 }
 
 // parseASN extracts an ASN from a query string like "asn:12345" or "AS12345".

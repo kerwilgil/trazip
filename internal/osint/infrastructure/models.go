@@ -246,6 +246,14 @@ func (c InfrastructureCorrelation) Validate() error {
 	return nil
 }
 
+// SourceError represents an error from a specific source during correlation enrichment.
+type SourceError struct {
+	Provider  string `json:"provider"`   // e.g., "peeringdb", "osm"
+	Operation string `json:"operation"`  // e.g., "netixlan", "netfac", "ixfac"
+	Message   string `json:"message"`    // Sanitized error message
+	ErrorType string `json:"errorType"`  // "timeout", "rate_limit", "server_error", "malformed", "cancelled"
+}
+
 // ============================================================
 // Infrastructure Collection (Bounded, Deterministic)
 // ============================================================
@@ -259,6 +267,7 @@ type InfrastructureCollection struct {
 	SubmarineCables   []SubmarineCable       `json:"submarineCables"`
 	Correlations      []InfrastructureCorrelation `json:"correlations"`
 	Provenance        []osint.Provenance     `json:"provenance"`
+	SourceErrors      []SourceError          `json:"sourceErrors,omitempty"`
 	RetrievedAt       string                 `json:"retrievedAt"` // RFC3339
 	Query             string                 `json:"query"`        // Original query/input
 	Bounds            InfraBounds            `json:"bounds"`
