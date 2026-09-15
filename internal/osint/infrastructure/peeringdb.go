@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"trazip/internal/intel/external"
@@ -208,7 +209,9 @@ func (c *PeeringDBClient) QueryPeeringDB(ctx context.Context, path string, param
 		params.Set("offset", "0")
 	}
 
-	u := c.baseURL + path
+	// Ensure baseURL doesn't have trailing slash to avoid double slashes
+	baseURL := strings.TrimSuffix(c.baseURL, "/")
+	u := baseURL + path
 	if len(params) > 0 {
 		u += "?" + params.Encode()
 	}

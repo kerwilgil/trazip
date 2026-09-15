@@ -7,15 +7,14 @@ import (
 	"time"
 )
 
-// RateLimiter implements a token bucket rate limiter with serial execution guarantee.
-// It ensures that requests are properly spaced even under high concurrency.
+// RateLimiter implements a serializing rate limiter.
+// It ensures that requests are properly spaced even under high concurrency
+// by assigning each caller a scheduled time slot.
 type RateLimiter struct {
 	mu       sync.Mutex
 	rate     float64       // requests per second
 	interval time.Duration // minimum interval between requests
-	next     time.Time     // when the next request can be made
-	tokens   float64       // available tokens
-	maxTokens float64      // bucket capacity
+	nextTime time.Time     // when the next request slot is available
 }
 
 // NewRateLimiter creates a new rate limiter with the given rate (requests per second).
@@ -25,16 +24,15 @@ func NewRateLimiter(rate float64) *RateLimiter {
 		return &RateLimiter{rate: 0}
 	}
 	return &RateLimiter{
-		rate:      rate,
-		interval:  time.Duration(float64(time.Second) / rate),
-		next:      time.Now(),
-		tokens:    1.0, // start with 1 token to allow immediate first request
-		maxTokens: 1.0,
+		rate:     rate,
+		interval: time.Duration(float64(time.Second) / rate),
+		nextTime: time.Now(),
 	}
 }
 
 // Wait blocks until a request can be made, respecting the rate limit.
 // Returns context error if context is cancelled while waiting.
+// Uses serial scheduling: each caller gets a reserved time slot.
 func (rl *RateLimiter) Wait(ctx context.Context) error {
 	if rl.rate <= 0 {
 		return nil // no limit
@@ -43,46 +41,32 @@ func (rl *RateLimiter) Wait(ctx context.Context) error {
 	rl.mu.Lock()
 	now := time.Now()
 
-	// Refill tokens based on time elapsed
-	elapsed := now.Sub(rl.next)
-	if elapsed > 0 {
-		// Add tokens based on elapsed time
-		rl.tokens = min(rl.maxTokens, rl.tokens+float64(elapsed)/float64(rl.interval))
+	// Calculate when this request can run
+	scheduledAt := rl.nextTime
+	if now.After(scheduledAt) {
+		scheduledAt = now
 	}
 
-	if rl.tokens >= 1.0 {
-		// Token available, consume it
-		rl.tokens--
-		rl.next = now.Add(rl.interval)
-		rl.mu.Unlock()
-		return nil
-	}
-
-	// No token available, need to wait
-	waitTime := time.Duration((1.0 - rl.tokens) * float64(rl.interval))
-	rl.tokens = 0
-	rl.next = now.Add(waitTime)
+	// Reserve the next slot
+	rl.nextTime = scheduledAt.Add(rl.interval)
 	rl.mu.Unlock()
 
-	// Wait outside the lock to avoid blocking other goroutines
-	timer := time.NewTimer(waitTime)
-	select {
-	case <-timer.C:
-		return nil
-	case <-ctx.Done():
-		if !timer.Stop() {
-			<-timer.C
+	// Wait until scheduled time (outside the lock)
+	if now.Before(scheduledAt) {
+		waitDuration := scheduledAt.Sub(now)
+		timer := time.NewTimer(waitDuration)
+		select {
+		case <-timer.C:
+			return nil
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
 		}
-		return ctx.Err()
 	}
-}
 
-// min returns the minimum of two float64 values.
-func min(a, b float64) float64 {
-	if a < b {
-		return a
-	}
-	return b
+	return nil
 }
 
 // SharedRateLimiter provides a process-wide rate limiter for a given endpoint.

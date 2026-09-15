@@ -152,8 +152,8 @@ export default function OsintIntelligence() {
     }
 
     // Process Landing Stations
-    if (execData.landing_stations) {
-      for (const ls of execData.landing_stations) {
+    if (execData.landingStations) {
+      for (const ls of execData.landingStations) {
         entities.push({
           id: ls.id,
           kind: asEntityKind('landing_station'),
@@ -171,8 +171,8 @@ export default function OsintIntelligence() {
     }
 
     // Process Submarine Cables
-    if (execData.submarine_cables) {
-      for (const cable of execData.submarine_cables) {
+    if (execData.submarineCables) {
+      for (const cable of execData.submarineCables) {
         entities.push({
           id: cable.id,
           kind: asEntityKind('submarine_cable'),
@@ -496,11 +496,11 @@ export default function OsintIntelligence() {
             {t('Error:')} {execError}
           </div>
         )}
-        {execState === 'success' && execData && (
-          <div className="note" style={{ marginTop: 8 }}>
-            {t('Resultados recibidos:')} {t('IXPs')}: {execData.ixps?.length || 0}, {t('Facilities')}: {execData.facilities?.length || 0}, {t('Landing Stations')}: {execData.landing_stations?.length || 0}, {t('Submarine Cables')}: {execData.submarine_cables?.length || 0}, {t('Correlaciones')}: {execData.correlations?.length || 0}
-          </div>
-        )}
+{execState === 'success' && execData && (
+            <div className="note" style={{ marginTop: 8 }}>
+              {t('Resultados recibidos:')} {t('IXPs')}: {execData.ixps?.length || 0}, {t('Facilities')}: {execData.facilities?.length || 0}, {t('Landing Stations')}: {execData.landingStations?.length || 0}, {t('Submarine Cables')}: {execData.submarineCables?.length || 0}, {t('Correlaciones')}: {execData.correlations?.length || 0}
+            </div>
+          )}
       </section>
 
       {/* ---- Registered providers (real metadata) ---- */}
@@ -864,6 +864,20 @@ export default function OsintIntelligence() {
               'Fuentes: OpenStreetMap (ODbL), PeeringDB (AUP).'
             )}
           </div>
+
+          {/* Source Errors / Warnings */}
+          {execData && execData.sourceErrors && execData.sourceErrors.length > 0 && (
+            <div className="note" style={{ marginTop: 12, fontSize: 11, border: '1px solid var(--warn)', background: 'var(--warn-bg)', borderRadius: 4, padding: 8 }}>
+              <strong>{t('Advertencias de correlación (resultado parcial):')}</strong>
+              <ul style={{ marginTop: 8, marginBottom: 0, paddingLeft: 20 }}>
+                {execData.sourceErrors.map((err: any, idx: number) => (
+                  <li key={idx} style={{ marginBottom: 4, fontSize: 11 }}>
+                    <strong>{err.provider}:{err.operation}</strong> — {err.message} ({err.errorType})
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       </section>
 

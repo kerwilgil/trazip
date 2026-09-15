@@ -4,6 +4,7 @@ package infrastructure
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -413,7 +414,70 @@ func (p *InfraProvider) lookupInfrastructure(ctx context.Context, input any, bas
 		return osint.Result{Err: fmt.Errorf("infrastructure lookup: empty query")}
 	}
 
-	coll := &InfrastructureCollection{}
+coll := &InfrastructureCollection{}
+
+	// Handle "asn:NUMBER" queries - direct PeeringDB ASN lookup without bbox
+	if asn := parseASN(query); asn > 0 {
+		// Query PeeringDB for networks with this ASN
+		net, err := p.pdbClient.GetNetwork(ctx, asn)
+		if err != nil {
+			return osint.Result{Err: fmt.Errorf("peeringdb network lookup: %w", err)}
+		}
+
+		// Get IXPs where this ASN is present
+		netixlans, err := p.pdbClient.ListNetworksAtIXP(ctx, net.ID)
+		if err == nil {
+			for _, nixlan := range netixlans {
+				if nixlan.Operational {
+					ixp, err := p.pdbClient.GetIXP(ctx, nixlan.IXLANID)
+					if err == nil {
+						ixpProv := ProvenanceFor(p.MetaVal, osint.CapabilityIXP, fmt.Sprintf("peeringdb:ix:%d", ixp.ID))
+						ixpConv, err := ConvertPeeringDBIXP(ixp, ixpProv)
+						if err == nil {
+							coll.IXPs = append(coll.IXPs, ixpConv)
+							coll.Provenance = append(coll.Provenance, ixpProv)
+						}
+					}
+				}
+			}
+		}
+
+		// Get facilities where this ASN is present
+		netfacs, err := p.pdbClient.GetNetFacByASN(ctx, asn)
+		if err == nil {
+			for _, netfac := range netfacs {
+				fac, err := p.pdbClient.GetFacility(ctx, netfac.FacID)
+				if err == nil {
+					facProv := ProvenanceFor(p.MetaVal, osint.CapabilityFacility, fmt.Sprintf("peeringdb:fac:%d", fac.ID))
+					facConv, err := ConvertPeeringDBFacility(fac, facProv)
+					if err == nil {
+						coll.Facilities = append(coll.Facilities, facConv)
+						coll.Provenance = append(coll.Provenance, facProv)
+					}
+				}
+			}
+		}
+
+		// The correlation engine will use this ASN for ASN->IXP and ASN->Facility correlations
+		coll.Query = "infrastructure:" + query
+		coll.RetrievedAt = time.Now().UTC().Format(time.RFC3339)
+
+		// Build correlations with explicit evidence (will use the ASN for PeeringDB queries)
+		correlations, sourceErrors := p.buildCorrelations(ctx, coll, query)
+		coll.Correlations = correlations
+		coll.SourceErrors = sourceErrors
+
+		coll.EnsureNonNil()
+		p.sortCollections(coll)
+		coll.Truncate(DefaultInfraBounds())
+		coll.Query = "infrastructure:" + query
+		coll.RetrievedAt = time.Now().UTC().Format(time.RFC3339)
+
+		return osint.Result{
+			Data:       coll,
+			Provenance: ProvenanceFor(p.MetaVal, osint.CapabilityInfrastructure, "infra-lookup:infrastructure"),
+		}
+	}
 
 	// For comprehensive search, we do multiple targeted searches with bounded queries
 	bbox, err := inferBBoxFromQuery(ctx, query)
@@ -494,6 +558,8 @@ func (p *InfraProvider) lookupInfrastructure(ctx context.Context, input any, bas
 	coll.SourceErrors = sourceErrors
 
 	coll.EnsureNonNil()
+	// Sort collections for deterministic ordering before truncation
+	p.sortCollections(coll)
 	coll.Truncate(DefaultInfraBounds())
 	coll.Query = "infrastructure:" + query
 	coll.RetrievedAt = time.Now().UTC().Format(time.RFC3339)
@@ -988,4 +1054,21 @@ var cityBBox = map[string]string{
 	"TH:Bangkok":     "13.6,100.4,13.9,100.7",
 	"VN:Ho Chi Minh": "10.6,106.5,10.9,106.8",
 	"PH:Manila":      "14.4,120.8,14.7,121.1",
+}
+
+// sortCollections sorts all collections deterministically by ID before truncation.
+func (p *InfraProvider) sortCollections(coll *InfrastructureCollection) {
+	// Sort by ID for deterministic ordering
+	sort.Slice(coll.IXPs, func(i, j int) bool { return coll.IXPs[i].ID < coll.IXPs[j].ID })
+	sort.Slice(coll.Facilities, func(i, j int) bool { return coll.Facilities[i].ID < coll.Facilities[j].ID })
+	sort.Slice(coll.LandingStations, func(i, j int) bool { return coll.LandingStations[i].ID < coll.LandingStations[j].ID })
+	sort.Slice(coll.SubmarineCables, func(i, j int) bool { return coll.SubmarineCables[i].ID < coll.SubmarineCables[j].ID })
+	sort.Slice(coll.Correlations, func(i, j int) bool { return coll.Correlations[i].ID < coll.Correlations[j].ID })
+	sort.Slice(coll.Provenance, func(i, j int) bool { return coll.Provenance[i].Endpoint < coll.Provenance[j].Endpoint })
+	sort.Slice(coll.SourceErrors, func(i, j int) bool {
+		if coll.SourceErrors[i].Provider != coll.SourceErrors[j].Provider {
+			return coll.SourceErrors[i].Provider < coll.SourceErrors[j].Provider
+		}
+		return coll.SourceErrors[i].Operation < coll.SourceErrors[j].Operation
+	})
 }

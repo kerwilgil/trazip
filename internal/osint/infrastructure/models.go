@@ -3,6 +3,7 @@ package infrastructure
 
 import (
 	"fmt"
+	"sort"
 
 	"trazip/internal/osint"
 )
@@ -294,7 +295,15 @@ func DefaultInfraBounds() InfraBounds {
 }
 
 // Truncate enforces bounds by truncating collections deterministically.
+// Sorts by ID first to ensure deterministic ordering.
 func (c *InfrastructureCollection) Truncate(b InfraBounds) {
+	// Sort all collections by ID for deterministic ordering before truncation
+	sort.Slice(c.IXPs, func(i, j int) bool { return c.IXPs[i].ID < c.IXPs[j].ID })
+	sort.Slice(c.Facilities, func(i, j int) bool { return c.Facilities[i].ID < c.Facilities[j].ID })
+	sort.Slice(c.LandingStations, func(i, j int) bool { return c.LandingStations[i].ID < c.LandingStations[j].ID })
+	sort.Slice(c.SubmarineCables, func(i, j int) bool { return c.SubmarineCables[i].ID < c.SubmarineCables[j].ID })
+	sort.Slice(c.Correlations, func(i, j int) bool { return c.Correlations[i].ID < c.Correlations[j].ID })
+
 	if len(c.IXPs) > b.MaxIXPs {
 		c.IXPs = c.IXPs[:b.MaxIXPs]
 	}
