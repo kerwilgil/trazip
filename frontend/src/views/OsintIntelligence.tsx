@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { executeOSINT, listOsintProviders } from '../lib/api';
+import { executeOSINT, executeInfrastructureOSINT, listOsintProviders } from '../lib/api';
 import { useI18n } from '../lib/i18n';
 import {
   ACTIVITY_DESCRIPTORS,
@@ -13,6 +13,11 @@ import {
   type MetadataState,
   type OsintProvider,
 } from '../lib/osint';
+import {
+  type InfrastructureCollection,
+  type InfrastructureExecuteResult,
+  type InfrastructureSourceError,
+} from '../lib/api';
 import {
   ENTITY_GRAPH_MAX_ZOOM,
   ENTITY_GRAPH_MIN_ZOOM,
@@ -59,7 +64,7 @@ export default function OsintIntelligence() {
   // Execution state
   const [execState, setExecState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [execError, setExecError] = useState<string>('');
-  const [execData, setExecData] = useState<any>(null);
+  const [execData, setExecData] = useState<InfrastructureCollection | null>(null);
   const [execProvenance, setExecProvenance] = useState<any>(null);
 
   // Entity Graph state (V1.5-4) — populated from infrastructure intelligence results
@@ -160,7 +165,7 @@ export default function OsintIntelligence() {
           label: ls.name,
           value: ls.name,
           attributes: {
-            city: ls.city,
+            city: ls.city || '',
             country: ls.country,
             region: ls.region || '',
             cables: (ls.cables || []).join(', '),
@@ -181,7 +186,7 @@ export default function OsintIntelligence() {
           attributes: {
             owners: (cable.owners || []).join(', '),
             lengthKm: cable.lengthKm?.toString() || '',
-            rfs: cable.rfs || '',
+            rfs: cable.readyForService || '',
             fiberPairs: cable.fiberPairs?.toString() || '',
             designCapacity: cable.designCapacity || '',
             source: cable.provenance?.ProviderName || 'unknown',
@@ -201,7 +206,7 @@ export default function OsintIntelligence() {
           directed: false,
           evidenceClass: asEvidenceClass(corr.evidenceClass),
           provenanceRef: corr.provenanceRef,
-          label: corr.label,
+          label: corr.label || '',
         });
       }
     }
@@ -295,7 +300,11 @@ export default function OsintIntelligence() {
     setExecProvenance(null);
 
     try {
-      const result = await executeOSINT(providerId, capability, target.trim());
+      // Use typed execute for infrastructure capability
+      const isInfra = capability === 'infrastructure' || capability === 'ixp' || capability === 'facility' || capability === 'landing_station' || capability === 'submarine_cable';
+      const result = isInfra
+        ? await executeInfrastructureOSINT(providerId, capability, target.trim())
+        : await executeOSINT(providerId, capability, target.trim());
       if (result.err) {
         setExecState('error');
         setExecError(result.err);
@@ -870,7 +879,7 @@ export default function OsintIntelligence() {
             <div className="note" style={{ marginTop: 12, fontSize: 11, border: '1px solid var(--warn)', background: 'var(--warn-bg)', borderRadius: 4, padding: 8 }}>
               <strong>{t('Advertencias de correlación (resultado parcial):')}</strong>
               <ul style={{ marginTop: 8, marginBottom: 0, paddingLeft: 20 }}>
-                {execData.sourceErrors.map((err: any, idx: number) => (
+                {execData.sourceErrors.map((err: InfrastructureSourceError, idx: number) => (
                   <li key={idx} style={{ marginBottom: 4, fontSize: 11 }}>
                     <strong>{err.provider}:{err.operation}</strong> — {err.message} ({err.errorType})
                   </li>

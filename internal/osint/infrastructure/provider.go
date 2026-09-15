@@ -418,14 +418,14 @@ coll := &InfrastructureCollection{}
 
 	// Handle "asn:NUMBER" queries - direct PeeringDB ASN lookup without bbox
 	if asn := parseASN(query); asn > 0 {
-		// Query PeeringDB for networks with this ASN
-		net, err := p.pdbClient.GetNetwork(ctx, asn)
+		// Query PeeringDB for networks with this ASN (validates ASN exists)
+		_, err := p.pdbClient.GetNetwork(ctx, asn)
 		if err != nil {
 			return osint.Result{Err: fmt.Errorf("peeringdb network lookup: %w", err)}
 		}
 
-		// Get IXPs where this ASN is present
-		netixlans, err := p.pdbClient.ListNetworksAtIXP(ctx, net.ID)
+		// Get IXLANs where this ASN is present (queries /netixlan?asn=...)
+		netixlans, err := p.pdbClient.ListNetIXLANsByASN(ctx, asn)
 		if err == nil {
 			for _, nixlan := range netixlans {
 				if nixlan.Operational {

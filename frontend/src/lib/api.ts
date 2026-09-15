@@ -1484,6 +1484,12 @@ export interface OSINTExecuteResult {
   err?: string;
 }
 
+export interface InfrastructureExecuteResult {
+  data: InfrastructureCollection | null;
+  provenance: any;
+  err?: string;
+}
+
 // ---- Infrastructure Intelligence Types (V1.5-6) ----
 // Strongly-typed contracts for infrastructure intelligence results.
 
@@ -1598,9 +1604,17 @@ export interface InfrastructureCollection {
   submarineCables: InfrastructureSubmarineCable[];
   correlations: InfrastructureCorrelation[];
   provenance: any[];
+  sourceErrors?: InfrastructureSourceError[];
   retrievedAt: string;
   query: string;
   bounds: InfrastructureBounds;
+}
+
+export interface InfrastructureSourceError {
+  provider: string;
+  operation: string;
+  message: string;
+  errorType: string;
 }
 
 export interface InfrastructureExecuteResult {
@@ -1612,6 +1626,11 @@ export interface InfrastructureExecuteResult {
 export async function executeOSINT(providerId: string, capability: string, input: string): Promise<OSINTExecuteResult> {
   if (!hasRuntime()) return { data: null, provenance: null, err: 'Sin runtime Wails' };
   return goExecuteOSINT(providerId, capability, input) as unknown as Promise<OSINTExecuteResult>;
+}
+
+export async function executeInfrastructureOSINT(providerId: string, capability: string, input: string): Promise<InfrastructureExecuteResult> {
+  if (!hasRuntime()) return { data: null, provenance: null, err: 'Sin runtime Wails' };
+  return goExecuteOSINT(providerId, capability, input) as unknown as Promise<InfrastructureExecuteResult>;
 }
 
 export async function rdapLookupIP(ip: string): Promise<rdap.Result> {

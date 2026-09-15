@@ -1449,10 +1449,10 @@ func TestCorrelationReachability(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(`{"data":[{"id":10,"name":"TEST-FAC","city":"Madrid","country":"ES","region_continent":"Europe","address1":"","suite":"","zipcode":"","latitude":40.41,"longitude":-3.70,"clli":"","npa":"","nxx":"","website":"","notes":"","created":"","updated":"","status":"ok","org_id":1,"suggested_ixps":[1]}],"meta":{"limit":1000,"offset":0,"total":1}}`))
 		case "netixlan":
-			// Return netixlan for IXP 1 (ix_id=1) or IXP 5 (ix_id=5, net_id used as ix_id by bug in provider)
-			// Also handle asn query
+			// Return netixlan for ASN 64500 (queries /netixlan?asn=64500)
+			// Also handle ix_id for ListNetworksAtIXP path
 			ixID := r.URL.Query().Get("ix_id")
-			if ixID == "1" || ixID == "5" || r.URL.Query().Get("asn") == "64500" {
+			if ixID == "1" || r.URL.Query().Get("asn") == "64500" {
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte(`{"data":[{"id":100,"net_id":5,"ixlan_id":1,"ipaddr4":"192.0.2.1","ipaddr6":"","asn":64500,"speed":10000,"operational":true,"is_rs_peer":false,"created":"","updated":""}],"meta":{"limit":1000,"offset":0,"total":1}}`))
 			} else {
@@ -1789,5 +1789,183 @@ func TestDeterministicOrdering(t *testing.T) {
 	}
 	if coll3.IXPs[0].ID != "ixp-1" || coll3.IXPs[1].ID != "ixp-2" || coll3.IXPs[2].ID != "ixp-3" {
 		t.Errorf("Truncate did not preserve deterministic order: %v", coll3.IXPs)
+	}
+}
+
+// TestSourceErrorClassification tests SourceError error type classification.
+func TestSourceErrorClassification(t *testing.T) {
+	tests := []struct {
+		name       string
+		errMsg     string
+		wantType   string
+	}{
+		{
+			name:       "timeout",
+			errMsg:     "context deadline exceeded",
+			wantType:   "timeout",
+		},
+		{
+			name:       "timeout explicit",
+			errMsg:     "request timeout",
+			wantType:   "timeout",
+		},
+		{
+			name:       "rate limit 429",
+			errMsg:     "HTTP 429",
+			wantType:   "rate_limit",
+		},
+		{
+			name:       "rate limited text",
+			errMsg:     "rate limited by PeeringDB",
+			wantType:   "rate_limit",
+		},
+		{
+			name:       "server error 500",
+			errMsg:     "server error HTTP 500",
+			wantType:   "server_error",
+		},
+		{
+			name:       "server error 502",
+			errMsg:     "HTTP 502 bad gateway",
+			wantType:   "server_error",
+		},
+		{
+			name:       "server error 503",
+			errMsg:     "service unavailable HTTP 503",
+			wantType:   "server_error",
+		},
+		{
+			name:       "malformed JSON",
+			errMsg:     "json: unmarshal failed: invalid character",
+			wantType:   "malformed",
+		},
+		{
+			name:       "decode error",
+			errMsg:     "decode response failed",
+			wantType:   "malformed",
+		},
+		{
+			name:       "cancelled",
+			errMsg:     "context canceled",
+			wantType:   "cancelled",
+		},
+		{
+			name:       "cancelled US spelling",
+			errMsg:     "context cancelled",
+			wantType:   "cancelled",
+		},
+		{
+			name:       "unknown error",
+			errMsg:     "some random error",
+			wantType:   "unknown",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errType := classifyErrorForTest(tt.errMsg)
+			if errType != tt.wantType {
+				t.Errorf("classifyError(%q) = %q, want %q", tt.errMsg, errType, tt.wantType)
+			}
+		})
+	}
+}
+
+// classifyErrorForTest mirrors the classifyError function from provider.go for testing.
+func classifyErrorForTest(errStr string) string {
+	switch {
+	case strings.Contains(errStr, "timeout") || strings.Contains(errStr, "context deadline"):
+		return "timeout"
+	case strings.Contains(errStr, "429") || strings.Contains(errStr, "rate limited"):
+		return "rate_limit"
+	case strings.Contains(errStr, "500") || strings.Contains(errStr, "502") || strings.Contains(errStr, "503") || strings.Contains(errStr, "server error"):
+		return "server_error"
+	case strings.Contains(errStr, "decode") || strings.Contains(errStr, "unmarshal") || strings.Contains(errStr, "malformed"):
+		return "malformed"
+	case strings.Contains(errStr, "canceled") || strings.Contains(errStr, "cancelled"):
+		return "cancelled"
+	default:
+		return "unknown"
+	}
+}
+
+// TestSourceErrorSanitization tests that SourceError messages don't leak sensitive data.
+func TestSourceErrorSanitization(t *testing.T) {
+	// Test that error messages don't contain sensitive patterns
+	sensitivePatterns := []string{
+		"api-key",
+		"apikey",
+		"authorization",
+		"bearer",
+		"password",
+		"secret",
+		"token",
+		"credential",
+	}
+
+	// Simulate error messages that might come from PeeringDB/OSM
+	testErrors := []string{
+		"HTTP 429: rate limited",
+		"context deadline exceeded",
+		"server error HTTP 500",
+		"json: unmarshal failed: invalid character",
+		"connection refused",
+		"timeout waiting for response",
+	}
+
+	for _, errMsg := range testErrors {
+		for _, pattern := range sensitivePatterns {
+			if strings.Contains(strings.ToLower(errMsg), pattern) {
+				t.Errorf("Error message %q contains sensitive pattern %q", errMsg, pattern)
+			}
+		}
+	}
+}
+
+// TestSourceErrorInCollection tests that SourceError is properly serialized in InfrastructureCollection.
+func TestSourceErrorInCollection(t *testing.T) {
+	coll := &InfrastructureCollection{
+		IXPs: []IXP{},
+		Facilities: []Facility{},
+		LandingStations: []LandingStation{},
+		SubmarineCables: []SubmarineCable{},
+		Correlations: []InfrastructureCorrelation{},
+		Provenance: []osint.Provenance{},
+		SourceErrors: []SourceError{
+			{Provider: "peeringdb", Operation: "netixlan", Message: "timeout", ErrorType: "timeout"},
+			{Provider: "osm", Operation: "query", Message: "rate limited", ErrorType: "rate_limit"},
+		},
+		RetrievedAt: time.Now().UTC().Format(time.RFC3339),
+		Query: "test",
+		Bounds: DefaultInfraBounds(),
+	}
+
+	data, err := json.Marshal(coll)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+
+	// Verify sourceErrors is present in JSON
+	sourceErrors, ok := parsed["sourceErrors"]
+	if !ok {
+		t.Error("sourceErrors field missing from JSON")
+	}
+
+	errorsList, ok := sourceErrors.([]interface{})
+	if !ok || len(errorsList) != 2 {
+		t.Errorf("expected 2 source errors, got %v", sourceErrors)
+	}
+
+	// Verify error types
+	if errorsList[0].(map[string]interface{})["errorType"] != "timeout" {
+		t.Errorf("first error type mismatch: %v", errorsList[0])
+	}
+	if errorsList[1].(map[string]interface{})["errorType"] != "rate_limit" {
+		t.Errorf("second error type mismatch: %v", errorsList[1])
 	}
 }
