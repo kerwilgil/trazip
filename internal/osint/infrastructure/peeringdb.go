@@ -165,7 +165,8 @@ type PeeringDBIXLAN struct {
 type PeeringDBNetIXLAN struct {
 	ID          int    `json:"id"`
 	NetID        int    `json:"net_id"`
-	IXLANID      int    `json:"ixlan_id"`
+	IXID         int    `json:"ix_id"`       // IXP ID (for fetching IXP details)
+	IXLANID      int    `json:"ixlan_id"`    // IXLAN ID (for IXLAN details)
 	IPv4Address  string `json:"ipaddr4"`
 	IPv6Address  string `json:"ipaddr6"`
 	ASN          int    `json:"asn"`

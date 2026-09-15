@@ -1617,12 +1617,6 @@ export interface InfrastructureSourceError {
   errorType: string;
 }
 
-export interface InfrastructureExecuteResult {
-  data: InfrastructureCollection | null;
-  provenance: any;
-  err?: string;
-}
-
 export async function executeOSINT(providerId: string, capability: string, input: string): Promise<OSINTExecuteResult> {
   if (!hasRuntime()) return { data: null, provenance: null, err: 'Sin runtime Wails' };
   return goExecuteOSINT(providerId, capability, input) as unknown as Promise<OSINTExecuteResult>;

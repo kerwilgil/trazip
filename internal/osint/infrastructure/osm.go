@@ -251,6 +251,27 @@ func FacilityQuery(bbox string) string {
 out body center;`, bbox, bbox, bbox, bbox, bbox, bbox, bbox)
 }
 
+// OSMElementQuery builds an Overpass QL query for a specific OSM element by ID.
+// This is used for direct lookups (osm:node/ID, osm:way/ID, osm:relation/ID).
+func OSMElementQuery(elemType string, id int64) string {
+	switch elemType {
+	case "node":
+		return fmt.Sprintf(`[out:json][timeout:25];
+node(%d);
+out body center;`, id)
+	case "way":
+		return fmt.Sprintf(`[out:json][timeout:25];
+way(%d);
+out body center;`, id)
+	case "relation":
+		return fmt.Sprintf(`[out:json][timeout:25];
+relation(%d);
+out body center;`, id)
+	default:
+		return ""
+	}
+}
+
 // ParseCableLandingStation converts an OSM element to a LandingStation.
 func ParseCableLandingStation(elem OverpassElement, prov osint.Provenance) (LandingStation, error) {
 	if elem.Type != "node" && elem.Type != "way" && elem.Type != "relation" {

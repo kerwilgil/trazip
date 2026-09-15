@@ -1432,11 +1432,21 @@ func TestCorrelationReachability(t *testing.T) {
 		path = strings.Trim(path, "/")
 		switch path {
 		case "ix":
-			// Return IXP with PeeringDBID
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"data":[{"id":1,"name":"TEST-IX","city":"Madrid","country":"ES","region_continent":"Europe","website":"","notes":"","created":"","updated":"","status":"ok","org_id":1,"ipv4_prefix":"","ipv6_prefix":""}],"meta":{"limit":1000,"offset":0,"total":1}}`))
+			// Return IXP with PeeringDBID = 17 (distinct from ixlan_id=901)
+			ixID := r.URL.Query().Get("id")
+			if ixID == "17" {
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{"data":[{"id":17,"name":"TEST-IX","city":"Madrid","country":"ES","region_continent":"Europe","website":"","notes":"","created":"","updated":"","status":"ok","org_id":1,"ipv4_prefix":"","ipv6_prefix":""}],"meta":{"limit":1000,"offset":0,"total":1}}`))
+			} else if ixID == "901" {
+				// This should NOT be called - if it is, the test will fail because we return 404
+				w.WriteHeader(http.StatusNotFound)
+				w.Write([]byte(`{"data":[],"meta":{"limit":1000,"offset":0,"total":0}}`))
+			} else {
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{"data":[],"meta":{"limit":1000,"offset":0,"total":0}}`))
+			}
 		case "net":
-			// Return network for ASN 64500
+			// Return network for ASN 64500 (net_id = 5)
 			if r.URL.Query().Get("asn") == "64500" {
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte(`{"data":[{"id":5,"asn":64500,"name":"TEST-NET","website":"","info_type":"NSP","policy":"Open","notes":"","created":"","updated":"","status":"ok","org_id":1}],"meta":{"limit":1000,"offset":0,"total":1}}`))
@@ -1445,22 +1455,22 @@ func TestCorrelationReachability(t *testing.T) {
 				w.Write([]byte(`{"data":[],"meta":{"limit":1000,"offset":0,"total":0}}`))
 			}
 		case "fac":
-			// Return Facility with PeeringDBID
+			// Return Facility with PeeringDBID = 10
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"data":[{"id":10,"name":"TEST-FAC","city":"Madrid","country":"ES","region_continent":"Europe","address1":"","suite":"","zipcode":"","latitude":40.41,"longitude":-3.70,"clli":"","npa":"","nxx":"","website":"","notes":"","created":"","updated":"","status":"ok","org_id":1,"suggested_ixps":[1]}],"meta":{"limit":1000,"offset":0,"total":1}}`))
+			w.Write([]byte(`{"data":[{"id":10,"name":"TEST-FAC","city":"Madrid","country":"ES","region_continent":"Europe","address1":"","suite":"","zipcode":"","latitude":40.41,"longitude":-3.70,"clli":"","npa":"","nxx":"","website":"","notes":"","created":"","updated":"","status":"ok","org_id":1,"suggested_ixps":[17]}],"meta":{"limit":1000,"offset":0,"total":1}}`))
 		case "netixlan":
 			// Return netixlan for ASN 64500 (queries /netixlan?asn=64500)
 			// Also handle ix_id for ListNetworksAtIXP path
 			ixID := r.URL.Query().Get("ix_id")
-			if ixID == "1" || r.URL.Query().Get("asn") == "64500" {
+			if ixID == "17" || r.URL.Query().Get("asn") == "64500" {
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte(`{"data":[{"id":100,"net_id":5,"ixlan_id":1,"ipaddr4":"192.0.2.1","ipaddr6":"","asn":64500,"speed":10000,"operational":true,"is_rs_peer":false,"created":"","updated":""}],"meta":{"limit":1000,"offset":0,"total":1}}`))
+				w.Write([]byte(`{"data":[{"id":100,"net_id":5,"ix_id":17,"ixlan_id":901,"ipaddr4":"192.0.2.1","ipaddr6":"","asn":64500,"speed":10000,"operational":true,"is_rs_peer":false,"created":"","updated":""}],"meta":{"limit":1000,"offset":0,"total":1}}`))
 			} else {
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte(`{"data":[],"meta":{"limit":1000,"offset":0,"total":0}}`))
 			}
 		case "netfac":
-			// Return netfac for ASN 64500
+			// Return netfac for ASN 64500 (net_id = 5)
 			if r.URL.Query().Get("asn") == "64500" || r.URL.Query().Get("net_id") == "5" {
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte(`{"data":[{"id":200,"net_id":5,"fac_id":10,"avg_bps":0,"created":"","updated":""}],"meta":{"limit":1000,"offset":0,"total":1}}`))
@@ -1469,10 +1479,10 @@ func TestCorrelationReachability(t *testing.T) {
 				w.Write([]byte(`{"data":[],"meta":{"limit":1000,"offset":0,"total":0}}`))
 			}
 		case "ixfac":
-			// Return ixfac for Facility 10
+			// Return ixfac for Facility 10 -> IXP 17
 			if r.URL.Query().Get("fac_id") == "10" {
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte(`{"data":[{"fac_id":10,"ix_id":1}],"meta":{"limit":1000,"offset":0,"total":1}}`))
+				w.Write([]byte(`{"data":[{"fac_id":10,"ix_id":17}],"meta":{"limit":1000,"offset":0,"total":1}}`))
 			} else {
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte(`{"data":[],"meta":{"limit":1000,"offset":0,"total":0}}`))
@@ -1535,6 +1545,30 @@ func TestCorrelationReachability(t *testing.T) {
 	}
 	if len(coll.Facilities) == 0 {
 		t.Errorf("expected at least 1 Facility from PeeringDB, got %d", len(coll.Facilities))
+	}
+
+	// Verify IXP has correct PeeringDBID (17, not 901 which is ixlan_id)
+	ixpFound := false
+	for _, ixp := range coll.IXPs {
+		if ixp.PeeringDBID == 17 {
+			ixpFound = true
+			break
+		}
+	}
+	if !ixpFound {
+		t.Errorf("expected IXP with PeeringDBID 17 (ix_id), got IXPs: %v", coll.IXPs)
+	}
+
+	// Verify Facility has correct PeeringDBID (10)
+	facFound := false
+	for _, fac := range coll.Facilities {
+		if fac.PeeringDBID == 10 {
+			facFound = true
+			break
+		}
+	}
+	if !facFound {
+		t.Errorf("expected Facility with PeeringDBID 10, got Facilities: %v", coll.Facilities)
 	}
 
 	// Verify OBSERVED correlations were created
@@ -1967,5 +2001,211 @@ func TestSourceErrorInCollection(t *testing.T) {
 	}
 	if errorsList[1].(map[string]interface{})["errorType"] != "rate_limit" {
 		t.Errorf("second error type mismatch: %v", errorsList[1])
+	}
+}
+
+// TestClassifyErrorType tests the exported ClassifyErrorType function.
+func TestClassifyErrorType(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantType   string
+	}{
+		{
+			name:       "timeout context deadline",
+			err:        fmt.Errorf("context deadline exceeded"),
+			wantType:   "timeout",
+		},
+		{
+			name:       "timeout explicit",
+			err:        fmt.Errorf("request timeout"),
+			wantType:   "timeout",
+		},
+		{
+			name:       "rate limit 429",
+			err:        fmt.Errorf("HTTP 429"),
+			wantType:   "rate_limit",
+		},
+		{
+			name:       "rate limited text",
+			err:        fmt.Errorf("rate limited by PeeringDB"),
+			wantType:   "rate_limit",
+		},
+		{
+			name:       "server error 500",
+			err:        fmt.Errorf("server error HTTP 500"),
+			wantType:   "server_error",
+		},
+		{
+			name:       "server error 502",
+			err:        fmt.Errorf("HTTP 502 bad gateway"),
+			wantType:   "server_error",
+		},
+		{
+			name:       "server error 503",
+			err:        fmt.Errorf("service unavailable HTTP 503"),
+			wantType:   "server_error",
+		},
+		{
+			name:       "malformed JSON",
+			err:        fmt.Errorf("json: unmarshal failed: invalid character"),
+			wantType:   "malformed",
+		},
+		{
+			name:       "decode error",
+			err:        fmt.Errorf("decode response failed"),
+			wantType:   "malformed",
+		},
+		{
+			name:       "cancelled US spelling",
+			err:        fmt.Errorf("context canceled"),
+			wantType:   "cancelled",
+		},
+		{
+			name:       "cancelled UK spelling",
+			err:        fmt.Errorf("context cancelled"),
+			wantType:   "cancelled",
+		},
+		{
+			name:       "unknown error",
+			err:        fmt.Errorf("some random error"),
+			wantType:   "unknown",
+		},
+		{
+			name:       "nil error",
+			err:        nil,
+			wantType:   "unknown",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errType := ClassifyErrorType(tt.err)
+			if errType != tt.wantType {
+				t.Errorf("ClassifyErrorType(%v) = %q, want %q", tt.err, errType, tt.wantType)
+			}
+		})
+	}
+}
+
+// TestSanitizeErrorMessage tests the exported SanitizeErrorMessage function.
+func TestSanitizeErrorMessage(t *testing.T) {
+	tests := []struct {
+		name           string
+		input          error
+		expectedSubstr string // substring that should be in sanitized output
+		notSubstr      string // substring that should NOT be in sanitized output
+	}{
+		{
+			name:           "API key in error",
+			input:          fmt.Errorf("authentication failed: api_key=secret123"),
+			expectedSubstr: "api_key=***",
+			notSubstr:      "secret123",
+		},
+		{
+			name:           "API key with equals",
+			input:          fmt.Errorf("apikey=my-secret-key"),
+			expectedSubstr: "apikey=***",
+			notSubstr:      "my-secret-key",
+		},
+		{
+			name:           "Bearer token",
+			input:          fmt.Errorf("authorization: Bearer abc123token"),
+			expectedSubstr: "authorization: Bearer ***",
+			notSubstr:      "abc123token",
+		},
+		{
+			name:           "Password in error",
+			input:          fmt.Errorf("login failed: password=mypassword"),
+			expectedSubstr: "password=***",
+			notSubstr:      "mypassword",
+		},
+		{
+			name:           "Secret in error",
+			input:          fmt.Errorf("secret=supersecret"),
+			expectedSubstr: "secret=***",
+			notSubstr:      "supersecret",
+		},
+		{
+			name:           "Token in error",
+			input:          fmt.Errorf("token=xyz789"),
+			expectedSubstr: "token=***",
+			notSubstr:      "xyz789",
+		},
+		{
+			name:           "Credential in error",
+			input:          fmt.Errorf("credential=mycred"),
+			expectedSubstr: "credential=***",
+			notSubstr:      "mycred",
+		},
+		{
+			name:           "Access key in error",
+			input:          fmt.Errorf("access_key=AKIA123"),
+			expectedSubstr: "access_key=***",
+			notSubstr:      "AKIA123",
+		},
+		{
+			name:           "Secret key in error",
+			input:          fmt.Errorf("secret_key=abc"),
+			expectedSubstr: "secret_key=***",
+			notSubstr:      "abc",
+		},
+		{
+			name:           "No sensitive data",
+			input:          fmt.Errorf("connection timeout"),
+			expectedSubstr: "connection timeout",
+			notSubstr:      "",
+		},
+		{
+			name:           "Nil error",
+			input:          nil,
+			expectedSubstr: "",
+			notSubstr:      "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sanitized := SanitizeErrorMessage(tt.input)
+			if tt.expectedSubstr != "" {
+				if !strings.Contains(sanitized, tt.expectedSubstr) {
+					t.Errorf("SanitizeErrorMessage(%v) = %q, expected to contain %q", tt.input, sanitized, tt.expectedSubstr)
+				}
+			}
+			if tt.notSubstr != "" {
+				if strings.Contains(sanitized, tt.notSubstr) {
+					t.Errorf("SanitizeErrorMessage(%v) = %q, should not contain %q", tt.input, sanitized, tt.notSubstr)
+				}
+			}
+		})
+	}
+}
+
+// TestNewSourceError tests the NewSourceError constructor.
+func TestNewSourceError(t *testing.T) {
+	err := fmt.Errorf("timeout connecting to PeeringDB")
+	se := NewSourceError("peeringdb", "netixlan", err)
+
+	if se.Provider != "peeringdb" {
+		t.Errorf("Provider = %q, want %q", se.Provider, "peeringdb")
+	}
+	if se.Operation != "netixlan" {
+		t.Errorf("Operation = %q, want %q", se.Operation, "netixlan")
+	}
+	if se.ErrorType != "timeout" {
+		t.Errorf("ErrorType = %q, want %q", se.ErrorType, "timeout")
+	}
+	if !strings.Contains(se.Message, "timeout") {
+		t.Errorf("Message = %q, expected to contain 'timeout'", se.Message)
+	}
+
+	// Test with secret in error
+	errWithSecret := fmt.Errorf("auth failed: api_key=secret123")
+	se2 := NewSourceError("peeringdb", "auth", errWithSecret)
+	if strings.Contains(se2.Message, "secret123") {
+		t.Errorf("Message should not contain secret: %q", se2.Message)
+	}
+	if !strings.Contains(se2.Message, "***") {
+		t.Errorf("Message should contain redacted marker: %q", se2.Message)
 	}
 }

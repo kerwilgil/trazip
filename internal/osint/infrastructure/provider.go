@@ -110,9 +110,9 @@ func (p *InfraProvider) lookupIXP(ctx context.Context, input any, baseProv osint
 		coll.IXPs = append(coll.IXPs, i)
 		coll.Provenance = append(coll.Provenance, prov)
 	} else if osmType, osmID, ok := parseOSMQuery(query); ok && (osmType == "node" || osmType == "way" || osmType == "relation") {
-		// Direct OSM element lookup
+		// Direct OSM element lookup - use specific element query, not bbox with id filter
 		prov := ProvenanceFor(p.MetaVal, osint.CapabilityIXP, fmt.Sprintf("osm:%s/%d", osmType, osmID))
-		resp, err := p.osmClient.QueryOSM(ctx, IXPQuery(fmt.Sprintf("[id:%d]", osmID)))
+		resp, err := p.osmClient.QueryOSM(ctx, OSMElementQuery(osmType, osmID))
 		if err != nil {
 			return osint.Result{Err: fmt.Errorf("osm ixp direct lookup: %w", err)}
 		}
@@ -203,9 +203,9 @@ func (p *InfraProvider) lookupFacility(ctx context.Context, input any, baseProv 
 		coll.Facilities = append(coll.Facilities, f)
 		coll.Provenance = append(coll.Provenance, prov)
 	} else if osmType, osmID, ok := parseOSMQuery(query); ok && (osmType == "node" || osmType == "way" || osmType == "relation") {
-		// Direct OSM element lookup
+		// Direct OSM element lookup - use specific element query, not bbox with id filter
 		prov := ProvenanceFor(p.MetaVal, osint.CapabilityFacility, fmt.Sprintf("osm:%s/%d", osmType, osmID))
-		resp, err := p.osmClient.QueryOSM(ctx, FacilityQuery(fmt.Sprintf("[id:%d]", osmID)))
+		resp, err := p.osmClient.QueryOSM(ctx, OSMElementQuery(osmType, osmID))
 		if err != nil {
 			return osint.Result{Err: fmt.Errorf("osm facility direct lookup: %w", err)}
 		}
@@ -284,7 +284,7 @@ func (p *InfraProvider) lookupLandingStation(ctx context.Context, input any, bas
 	// Check for osm:TYPE/ID format - direct OSM element lookup
 	if osmType, osmID, ok := parseOSMQuery(query); ok && (osmType == "node" || osmType == "way" || osmType == "relation") {
 		prov := ProvenanceFor(p.MetaVal, osint.CapabilityLandingStation, fmt.Sprintf("osm:%s/%d", osmType, osmID))
-		resp, err := p.osmClient.QueryOSM(ctx, CableLandingStationQuery(fmt.Sprintf("[id:%d]", osmID)))
+		resp, err := p.osmClient.QueryOSM(ctx, OSMElementQuery(osmType, osmID))
 		if err != nil {
 			return osint.Result{Err: fmt.Errorf("osm landing_station direct lookup: %w", err)}
 		}
@@ -351,7 +351,7 @@ func (p *InfraProvider) lookupSubmarineCable(ctx context.Context, input any, bas
 	// Check for osm:TYPE/ID format - direct OSM element lookup
 	if osmType, osmID, ok := parseOSMQuery(query); ok && (osmType == "way" || osmType == "relation") {
 		prov := ProvenanceFor(p.MetaVal, osint.CapabilitySubmarineCable, fmt.Sprintf("osm:%s/%d", osmType, osmID))
-		resp, err := p.osmClient.QueryOSM(ctx, SubmarineCableQuery(fmt.Sprintf("[id:%d]", osmID)))
+		resp, err := p.osmClient.QueryOSM(ctx, OSMElementQuery(osmType, osmID))
 		if err != nil {
 			return osint.Result{Err: fmt.Errorf("osm submarine_cable direct lookup: %w", err)}
 		}
@@ -429,7 +429,8 @@ coll := &InfrastructureCollection{}
 		if err == nil {
 			for _, nixlan := range netixlans {
 				if nixlan.Operational {
-					ixp, err := p.pdbClient.GetIXP(ctx, nixlan.IXLANID)
+					// Use IXID (ix_id from PeeringDB) to fetch IXP details, not IXLANID
+					ixp, err := p.pdbClient.GetIXP(ctx, nixlan.IXID)
 					if err == nil {
 						ixpProv := ProvenanceFor(p.MetaVal, osint.CapabilityIXP, fmt.Sprintf("peeringdb:ix:%d", ixp.ID))
 						ixpConv, err := ConvertPeeringDBIXP(ixp, ixpProv)
@@ -576,26 +577,7 @@ coll := &InfrastructureCollection{}
 func (p *InfraProvider) buildCorrelations(ctx context.Context, coll *InfrastructureCollection, query string) ([]InfrastructureCorrelation, []SourceError) {
 	var correlations []InfrastructureCorrelation
 	var sourceErrors []SourceError
-	retrievedAt := time.Now().UTC().Format(time.RFC3339)
-
-	// Helper to classify error type
-	classifyError := func(err error) string {
-		errStr := err.Error()
-		switch {
-		case strings.Contains(errStr, "timeout") || strings.Contains(errStr, "context deadline"):
-			return "timeout"
-		case strings.Contains(errStr, "429") || strings.Contains(errStr, "rate limited"):
-			return "rate_limit"
-		case strings.Contains(errStr, "500") || strings.Contains(errStr, "502") || strings.Contains(errStr, "503") || strings.Contains(errStr, "server error"):
-			return "server_error"
-		case strings.Contains(errStr, "decode") || strings.Contains(errStr, "unmarshal") || strings.Contains(errStr, "malformed"):
-			return "malformed"
-		case strings.Contains(errStr, "canceled") || strings.Contains(errStr, "cancelled"):
-			return "cancelled"
-		default:
-return "unknown"
-	}
-}
+retrievedAt := time.Now().UTC().Format(time.RFC3339)
 
 	// ASN -> IXP correlations from PeeringDB netixlan (OBSERVED)
 	// For each IXP from PeeringDB, query netixlan for ASNs present
@@ -603,24 +585,14 @@ return "unknown"
 		if ixp.PeeringDBID > 0 {
 			netixlans, err := p.pdbClient.ListNetworksAtIXP(ctx, ixp.PeeringDBID)
 			if err != nil {
-				sourceErrors = append(sourceErrors, SourceError{
-					Provider:  "peeringdb",
-					Operation: "netixlan",
-					Message:   fmt.Sprintf("ASN->IXP correlation for IXP %s: %v", ixp.ID, err),
-					ErrorType: classifyError(err),
-				})
+				sourceErrors = append(sourceErrors, NewSourceError("peeringdb", "netixlan", fmt.Errorf("ASN->IXP correlation for IXP %s: %w", ixp.ID, err)))
 			} else {
 				for _, nixlan := range netixlans {
 					if nixlan.Operational {
 						prov := ProvenanceFor(p.MetaVal, osint.CapabilityInfrastructure, fmt.Sprintf("peeringdb:netixlan:%d", nixlan.ID))
 						corr, err := ConvertPeeringDBNetIXLAN(&nixlan, ixp.ID, prov)
 						if err != nil {
-							sourceErrors = append(sourceErrors, SourceError{
-								Provider:  "peeringdb",
-								Operation: "netixlan",
-								Message:   fmt.Sprintf("convert ASN->IXP correlation: %v", err),
-								ErrorType: classifyError(err),
-							})
+							sourceErrors = append(sourceErrors, NewSourceError("peeringdb", "netixlan", fmt.Errorf("convert ASN->IXP correlation: %w", err)))
 						} else {
 							corr.RetrievedAt = retrievedAt
 							// Add provenance to collection for OBSERVED correlation resolvability
@@ -660,12 +632,7 @@ return "unknown"
 	for asn := range asnSet {
 		netfacs, err := p.pdbClient.GetNetFacByASN(ctx, asn)
 		if err != nil {
-			sourceErrors = append(sourceErrors, SourceError{
-				Provider:  "peeringdb",
-				Operation: "netfac",
-				Message:   fmt.Sprintf("ASN->Facility correlation for AS%d: %v", asn, err),
-				ErrorType: classifyError(err),
-			})
+			sourceErrors = append(sourceErrors, NewSourceError("peeringdb", "netfac", fmt.Errorf("ASN->Facility correlation for AS%d: %w", asn, err)))
 		} else {
 			for _, netfac := range netfacs {
 				// Find matching facility in collection
@@ -674,12 +641,7 @@ return "unknown"
 						prov := ProvenanceFor(p.MetaVal, osint.CapabilityInfrastructure, fmt.Sprintf("peeringdb:netfac:%d", netfac.ID))
 						corr, err := ConvertPeeringDBNetFac(&netfac, fac.ID, asn, prov)
 						if err != nil {
-							sourceErrors = append(sourceErrors, SourceError{
-								Provider:  "peeringdb",
-								Operation: "netfac",
-								Message:   fmt.Sprintf("convert ASN->Facility correlation: %v", err),
-								ErrorType: classifyError(err),
-							})
+							sourceErrors = append(sourceErrors, NewSourceError("peeringdb", "netfac", fmt.Errorf("convert ASN->Facility correlation: %w", err)))
 						} else {
 							// Add provenance to collection for OBSERVED correlation resolvability
 							coll.Provenance = append(coll.Provenance, prov)
@@ -698,12 +660,7 @@ return "unknown"
 		if fac.PeeringDBID > 0 {
 			ixpIDs, err := p.pdbClient.ListIXPsByFacility(ctx, fac.PeeringDBID)
 			if err != nil {
-				sourceErrors = append(sourceErrors, SourceError{
-					Provider:  "peeringdb",
-					Operation: "ixfac",
-					Message:   fmt.Sprintf("IXP->Facility correlation for Facility %s: %v", fac.ID, err),
-					ErrorType: classifyError(err),
-				})
+				sourceErrors = append(sourceErrors, NewSourceError("peeringdb", "ixfac", fmt.Errorf("IXP->Facility correlation for Facility %s: %w", fac.ID, err)))
 			} else {
 				for _, ixpID := range ixpIDs {
 					// Find matching IXP in collection
