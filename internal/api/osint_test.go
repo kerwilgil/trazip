@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"reflect"
 	"testing"
 
 	"trazip/internal/osint"
@@ -39,15 +38,23 @@ func TestListOSINTProvidersEmptyRegistryIsArrayNotNull(t *testing.T) {
 	if got == nil {
 		t.Fatal("ListOSINTProviders returned nil; the frontend contract requires an array")
 	}
-	if len(got) != 0 {
-		t.Fatalf("a fresh registry must expose no providers, got %d", len(got))
+	// V1.5-6: infrastructure intelligence provider is registered by default
+	if len(got) != 1 {
+		t.Fatalf("a fresh registry must expose the infrastructure provider, got %d", len(got))
+	}
+	if got[0].ID != "infra.intelligence" {
+		t.Fatalf("expected infrastructure provider, got %s", got[0].ID)
 	}
 	raw, err := json.Marshal(got)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	if string(raw) != "[]" {
-		t.Fatalf("empty provider list must serialize as [], got %s", raw)
+	var arr []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &arr); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(arr) != 1 {
+		t.Fatalf("expected 1 provider in JSON array, got %d", len(arr))
 	}
 }
 
@@ -80,23 +87,33 @@ func TestListOSINTProvidersSerializesMetadataFaithfully(t *testing.T) {
 	}
 
 	got := s.ListOSINTProviders()
-	if len(got) != 2 {
-		t.Fatalf("got %d providers, want 2", len(got))
+	// V1.5-6: infrastructure provider + 2 test providers = 3 total
+	if len(got) != 3 {
+		t.Fatalf("got %d providers, want 3", len(got))
 	}
 
 	// Deterministic ordering: sorted by ID regardless of registration order
 	// (AllMetas iterates a map).
-	if got[0].ID != "portscan.example" || got[1].ID != "rdap.example" {
-		t.Fatalf("providers not sorted by ID: %s, %s", got[0].ID, got[1].ID)
+	if got[0].ID != "infra.intelligence" || got[1].ID != "portscan.example" || got[2].ID != "rdap.example" {
+		t.Fatalf("providers not sorted by ID: %s, %s, %s", got[0].ID, got[1].ID, got[2].ID)
 	}
 
-	rdapInfo, portInfo := got[1], got[0]
+	rdapInfo, portInfo, infraInfo := got[2], got[1], got[0]
 
-	if rdapInfo.Name != "RDAP (example)" {
-		t.Errorf("name not preserved: %q", rdapInfo.Name)
+	if infraInfo.ID != "infra.intelligence" {
+		t.Errorf("infrastructure provider missing: %s", infraInfo.ID)
 	}
-	if !reflect.DeepEqual(rdapInfo.Capabilities, []string{"rdap", "asn_mapping"}) {
-		t.Errorf("capabilities not preserved in order: %v", rdapInfo.Capabilities)
+	if infraInfo.Name != "Internet Infrastructure Intelligence" {
+		t.Errorf("infrastructure provider name not preserved: %q", infraInfo.Name)
+	}
+	if len(infraInfo.Capabilities) != 5 {
+		t.Errorf("infrastructure provider capabilities count wrong: %v", infraInfo.Capabilities)
+	}
+	if infraInfo.ActivityClass != "passive" || infraInfo.DisclosureClass != "passive" {
+		t.Errorf("infrastructure classes wrong: %s / %s", infraInfo.ActivityClass, infraInfo.DisclosureClass)
+	}
+	if infraInfo.RequiresScope {
+		t.Error("infrastructure provider must not require scope")
 	}
 	if rdapInfo.ActivityClass != "passive" || rdapInfo.DisclosureClass != "passive" {
 		t.Errorf("passive classes wrong: %s / %s", rdapInfo.ActivityClass, rdapInfo.DisclosureClass)
@@ -172,7 +189,12 @@ func TestListOSINTProvidersRejectsInvalidProviderMetadata(t *testing.T) {
 	if err == nil {
 		t.Fatal("registry accepted a provider with an empty capability")
 	}
-	if len(s.ListOSINTProviders()) != 0 {
-		t.Fatal("an unregistered provider surfaced in ListOSINTProviders")
+	// V1.5-6: infrastructure provider remains registered
+	got := s.ListOSINTProviders()
+	if len(got) != 1 {
+		t.Fatalf("expected 1 provider (infrastructure) after failed registration, got %d", len(got))
+	}
+	if got[0].ID != "infra.intelligence" {
+		t.Errorf("expected infrastructure provider, got %s", got[0].ID)
 	}
 }
