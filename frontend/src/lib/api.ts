@@ -24,6 +24,7 @@ import {
   LanTrustAssess as goLanTrustAssess,
   ExposureCompare as goExposureCompare,
   PassiveOSINT as goPassiveOSINT,
+  ExecuteOSINT as goExecuteOSINT,
   DNSResolvers as goDNSResolvers,
   DNSRecordTypes as goDNSRecordTypes,
   DNSQuery as goDNSQuery,
@@ -1471,6 +1472,159 @@ export interface OsintProviderInfo {
 export async function listOsintProviders(): Promise<OsintProviderInfo[]> {
   if (!hasRuntime()) return [];
   return goListOSINTProviders() as unknown as Promise<OsintProviderInfo[]>;
+}
+
+// ---- OSINT Intelligence Execution (V1.5-6) ----
+// ExecuteOSINT runs a passive OSINT provider through the Executor.
+// This is the only supported way to execute OSINT providers.
+
+export interface OSINTExecuteResult {
+  data: any;
+  provenance: any;
+  err?: string;
+}
+
+export interface InfrastructureExecuteResult {
+  data: InfrastructureCollection | null;
+  provenance: any;
+  err?: string;
+}
+
+// ---- Infrastructure Intelligence Types (V1.5-6) ----
+// Strongly-typed contracts for infrastructure intelligence results.
+
+export interface InfrastructureIXP {
+  id: string;
+  name: string;
+  city: string;
+  country: string;
+  region?: string;
+  latitude?: number;
+  longitude?: number;
+  website?: string;
+  peeringdbId?: number;
+  osmId?: string;
+  peeringLans?: InfrastructureIXPLan[];
+  provenance: any;
+  lastUpdated: string;
+  notes?: string;
+}
+
+export interface InfrastructureIXPLan {
+  id: string;
+  name: string;
+  vlan?: number;
+  mtu?: number;
+  ipv4Prefix?: string;
+  ipv6Prefix?: string;
+  speed?: number;
+  operational: boolean;
+  members?: string[];
+}
+
+export interface InfrastructureFacility {
+  id: string;
+  name: string;
+  orgName?: string;
+  city: string;
+  country: string;
+  region?: string;
+  address?: string;
+  latitude?: number;
+  longitude?: number;
+  clli?: string;
+  peeringdbId?: number;
+  osmId?: string;
+  website?: string;
+  ixps?: string[];
+  provenance: any;
+  lastUpdated: string;
+  notes?: string;
+}
+
+export interface InfrastructureLandingStation {
+  id: string;
+  name: string;
+  city?: string;
+  country: string;
+  region?: string;
+  latitude?: number;
+  longitude?: number;
+  facilityName?: string;
+  facilityId?: string;
+  cables?: string[];
+  peeringdbId?: number;
+  osmId?: string;
+  website?: string;
+  provenance: any;
+  lastUpdated: string;
+  notes?: string;
+}
+
+export interface InfrastructureSubmarineCable {
+  id: string;
+  name: string;
+  owners?: string[];
+  landingPoints?: string[];
+  readyForService?: string;
+  lengthKm?: number;
+  fiberPairs?: number;
+  designCapacity?: string;
+  osmIds?: string[];
+  wikipediaUrl?: string;
+  provenance: any;
+  lastUpdated: string;
+  notes?: string;
+}
+
+export interface InfrastructureCorrelation {
+  id: string;
+  networkEntity: string;
+  infraEntity: string;
+  relationKind: string;
+  evidenceClass: 'observed' | 'possible_context' | 'not_proven' | 'unknown';
+  provenanceRef: string;
+  label?: string;
+  confidence?: string;
+  retrievedAt: string;
+}
+
+export interface InfrastructureBounds {
+  maxIxps: number;
+  maxFacilities: number;
+  maxLandingStations: number;
+  maxSubmarineCables: number;
+  maxCorrelations: number;
+}
+
+export interface InfrastructureCollection {
+  ixps: InfrastructureIXP[];
+  facilities: InfrastructureFacility[];
+  landingStations: InfrastructureLandingStation[];
+  submarineCables: InfrastructureSubmarineCable[];
+  correlations: InfrastructureCorrelation[];
+  provenance: any[];
+  sourceErrors?: InfrastructureSourceError[];
+  retrievedAt: string;
+  query: string;
+  bounds: InfrastructureBounds;
+}
+
+export interface InfrastructureSourceError {
+  provider: string;
+  operation: string;
+  message: string;
+  errorType: string;
+}
+
+export async function executeOSINT(providerId: string, capability: string, input: string): Promise<OSINTExecuteResult> {
+  if (!hasRuntime()) return { data: null, provenance: null, err: 'Sin runtime Wails' };
+  return goExecuteOSINT(providerId, capability, input) as unknown as Promise<OSINTExecuteResult>;
+}
+
+export async function executeInfrastructureOSINT(providerId: string, capability: string, input: string): Promise<InfrastructureExecuteResult> {
+  if (!hasRuntime()) return { data: null, provenance: null, err: 'Sin runtime Wails' };
+  return goExecuteOSINT(providerId, capability, input) as unknown as Promise<InfrastructureExecuteResult>;
 }
 
 export async function rdapLookupIP(ip: string): Promise<rdap.Result> {

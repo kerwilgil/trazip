@@ -101,6 +101,8 @@ export function DownloadUpdate():Promise<void>;
 
 export function EnrichNetDiag(arg1:netdiag.Result):Promise<netdiag.Result>;
 
+export function ExecuteOSINT(arg1:string,arg2:string,arg3:string):Promise<api.OSINTExecuteResult>;
+
 export function ExposureCompare(arg1:Array<number>,arg2:Array<number>):Promise<serviceaudit.ExposureResult>;
 
 export function GeoLookup(arg1:string):Promise<geoip.Result>;
