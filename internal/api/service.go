@@ -35,6 +35,7 @@ import (
 	"trazip/internal/model"
 	"trazip/internal/monitor"
 	"trazip/internal/osint"
+	"trazip/internal/osint/infrastructure"
 	"trazip/internal/packet"
 	"trazip/internal/paths"
 	"trazip/internal/pcap"
@@ -102,10 +103,8 @@ type Service struct {
 	investigations *investigation.Manager
 
 	// osintRegistry is the OSINT Intelligence foundation's provider registry
-	// (V1.5-2). V1.5-3 wires only its read-only metadata to the UI via
-	// ListOSINTProviders — no provider is registered yet, and the registry
-	// never hands out a runnable provider. Execution (Executor + ScopeGuard)
-	// is a later phase.
+	// (V1.5-2). V1.5-6 registers the infrastructure intelligence provider
+	// and exposes execution via ExecuteOSINT through the Executor.
 	osintRegistry *osint.Registry
 
 	// bgpRealtimeStart constructs (but never starts — see
@@ -203,6 +202,29 @@ func NewServiceWithSessions(sessions *session.Manager, monitorMgr *monitor.Manag
 		bgpSessions:       make(map[string]*bgp.RealtimeSession),
 		bgpFinalSnapshots: make(map[string]bgp.RealtimeSessionInfo),
 		osintRegistry:     osint.NewRegistry(),
+	}
+	// Register infrastructure intelligence provider (V1.5-6)
+	if infraProvider, err := infrastructure.NewInfraProvider(infrastructure.InfraProviderConfig{
+		OSM: infrastructure.OSMConfig{
+			Timeout:    30 * time.Second,
+			RateLimit:  1.0,
+			BaseURL:    "https://overpass-api.de/api/interpreter",
+			UserAgent:  "TRAZIP/1.0 (infrastructure-intelligence; +https://github.com/kerwilgil/trazip)",
+		},
+		PeeringDB: infrastructure.PeeringDBConfig{
+			Timeout:   30 * time.Second,
+			RateLimit: 0.5,
+			BaseURL:   "https://peeringdb.com/api",
+			UserAgent: "TRAZIP/1.0 (infrastructure-intelligence; +https://github.com/kerwilgil/trazip)",
+		},
+		Enabled: true,
+	}); err != nil {
+		// Log but don't fail startup - infrastructure intelligence is optional
+		_ = err
+	} else if infraProvider != nil {
+		if err := s.osintRegistry.Register(infraProvider); err != nil {
+			_ = err
+		}
 	}
 	s.geoUpdater = geoupdate.New(dataDir, geo)
 	s.updateMgr = update.NewManager(Version, paths.Sub("updates"), paths.Sub("update-settings.json"))
@@ -482,8 +504,6 @@ func (s *Service) WebIntelAnalyze(rawInput, resolverAddr string) webintel.Result
 // in the OSINT Registry, sorted by ID for a deterministic UI. It never returns
 // a runnable provider — the registry hands out ProviderMeta copies only, and
 // the only route to execution is the Executor + ScopeGuard (not exposed here).
-// V1.5-3 registers no real providers, so this returns an empty slice; the
-// empty result is a valid "no sources registered yet" state, not an error.
 // Always a non-nil slice so the frontend contract (an array, never null) holds.
 func (s *Service) ListOSINTProviders() []OSINTProviderInfo {
 	out := []OSINTProviderInfo{}
@@ -507,6 +527,45 @@ func (s *Service) ListOSINTProviders() []OSINTProviderInfo {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
+}
+
+// OSINTExecuteResult wraps the result of an OSINT execution for Wails serialization.
+type OSINTExecuteResult struct {
+	Data       any                 `json:"data"`
+	Provenance osint.Provenance    `json:"provenance"`
+	Err        string              `json:"err,omitempty"`
+}
+
+// ExecuteOSINT runs a passive OSINT provider through the Executor.
+// This is the only supported way to execute OSINT providers.
+// providerID must be a registered provider ID (e.g., "infra.intelligence").
+// capability must be one of the provider's declared capabilities.
+// input is the query input (string for infrastructure intelligence).
+func (s *Service) ExecuteOSINT(providerID, capability, input string) OSINTExecuteResult {
+	if s.osintRegistry == nil {
+		return OSINTExecuteResult{Err: "OSINT registry not initialized"}
+	}
+
+	executor := osint.NewExecutor(s.osintRegistry)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	var cap osint.Capability = osint.Capability(capability)
+	res := executor.ExecutePassive(ctx, providerID, cap, input)
+
+	if res.Err != nil {
+		return OSINTExecuteResult{Err: res.Err.Error()}
+	}
+
+	// Ensure non-nil arrays in response
+	if coll, ok := res.Data.(*infrastructure.InfrastructureCollection); ok {
+		coll.EnsureNonNil()
+	}
+
+	return OSINTExecuteResult{
+		Data:       res.Data,
+		Provenance: res.Provenance,
+	}
 }
 
 // PassiveOSINT keeps all enrichment offline unless external is explicitly
