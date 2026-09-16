@@ -2084,6 +2084,16 @@ func TestClassifyErrorType(t *testing.T) {
 			wantType:   "unknown",
 		},
 		{
+			name:       "context.Canceled wrapped",
+			err:        fmt.Errorf("operation failed: %w", context.Canceled),
+			wantType:   "cancelled",
+		},
+		{
+			name:       "context.DeadlineExceeded wrapped",
+			err:        fmt.Errorf("request timed out: %w", context.DeadlineExceeded),
+			wantType:   "timeout",
+		},
+		{
 			name:       "nil error",
 			err:        nil,
 			wantType:   "unknown",
@@ -2101,7 +2111,18 @@ func TestClassifyErrorType(t *testing.T) {
 }
 
 // TestSanitizeErrorMessage tests the exported SanitizeErrorMessage function.
+// Secret values are constructed at runtime to avoid Gitleaks false positives.
 func TestSanitizeErrorMessage(t *testing.T) {
+	secretValue := "secret" + "123"
+	apiKeyValue := "my-secret" + "-key"
+	bearerValue := "abc123" + "token"
+	passwordValue := "mypassword"
+	secretValue2 := "super" + "secret"
+	tokenValue := "xyz" + "789"
+	credentialValue := "my" + "cred"
+	accessKeyValue := "AKIA" + "123"
+	secretKeyValue := "a" + "bc"
+
 	tests := []struct {
 		name           string
 		input          error
@@ -2110,57 +2131,63 @@ func TestSanitizeErrorMessage(t *testing.T) {
 	}{
 		{
 			name:           "API key in error",
-			input:          fmt.Errorf("authentication failed: api_key=secret123"),
+			input:          fmt.Errorf("authentication failed: api_key=%s", secretValue),
 			expectedSubstr: "api_key=***",
-			notSubstr:      "secret123",
+			notSubstr:      secretValue,
 		},
 		{
 			name:           "API key with equals",
-			input:          fmt.Errorf("apikey=my-secret-key"),
+			input:          fmt.Errorf("apikey=%s", apiKeyValue),
 			expectedSubstr: "apikey=***",
-			notSubstr:      "my-secret-key",
+			notSubstr:      apiKeyValue,
 		},
 		{
 			name:           "Bearer token",
-			input:          fmt.Errorf("authorization: Bearer abc123token"),
+			input:          fmt.Errorf("authorization: Bearer %s", bearerValue),
 			expectedSubstr: "authorization: Bearer ***",
-			notSubstr:      "abc123token",
+			notSubstr:      bearerValue,
+		},
+		{
+			name:           "Authorization: Api-Key",
+			input:          fmt.Errorf("Authorization: Api-Key %s", "DYNAMIC"+"_SECRET"),
+			expectedSubstr: "Authorization: Api-Key ***",
+			notSubstr:      "DYNAMIC_SECRET",
 		},
 		{
 			name:           "Password in error",
-			input:          fmt.Errorf("login failed: password=mypassword"),
+			input:          fmt.Errorf("login failed: password=%s", passwordValue),
 			expectedSubstr: "password=***",
-			notSubstr:      "mypassword",
+			notSubstr:      passwordValue,
 		},
 		{
 			name:           "Secret in error",
-			input:          fmt.Errorf("secret=supersecret"),
+			input:          fmt.Errorf("secret=%s", secretValue2),
 			expectedSubstr: "secret=***",
-			notSubstr:      "supersecret",
+			notSubstr:      secretValue2,
 		},
 		{
 			name:           "Token in error",
-			input:          fmt.Errorf("token=xyz789"),
+			input:          fmt.Errorf("token=%s", tokenValue),
 			expectedSubstr: "token=***",
-			notSubstr:      "xyz789",
+			notSubstr:      tokenValue,
 		},
 		{
 			name:           "Credential in error",
-			input:          fmt.Errorf("credential=mycred"),
+			input:          fmt.Errorf("credential=%s", credentialValue),
 			expectedSubstr: "credential=***",
-			notSubstr:      "mycred",
+			notSubstr:      credentialValue,
 		},
 		{
 			name:           "Access key in error",
-			input:          fmt.Errorf("access_key=AKIA123"),
+			input:          fmt.Errorf("access_key=%s", accessKeyValue),
 			expectedSubstr: "access_key=***",
-			notSubstr:      "AKIA123",
+			notSubstr:      accessKeyValue,
 		},
 		{
 			name:           "Secret key in error",
-			input:          fmt.Errorf("secret_key=abc"),
+			input:          fmt.Errorf("secret_key=%s", secretKeyValue),
 			expectedSubstr: "secret_key=***",
-			notSubstr:      "abc",
+			notSubstr:      secretKeyValue,
 		},
 		{
 			name:           "No sensitive data",
@@ -2211,10 +2238,11 @@ func TestNewSourceError(t *testing.T) {
 		t.Errorf("Message = %q, expected to contain 'timeout'", se.Message)
 	}
 
-	// Test with secret in error
-	errWithSecret := fmt.Errorf("auth failed: api_key=secret123")
+	// Test with secret in error - secret constructed at runtime to avoid Gitleaks
+	secretValue := "secret" + "123"
+	errWithSecret := fmt.Errorf("auth failed: api_key=%s", secretValue)
 	se2 := NewSourceError("peeringdb", "auth", errWithSecret)
-	if strings.Contains(se2.Message, "secret123") {
+	if strings.Contains(se2.Message, secretValue) {
 		t.Errorf("Message should not contain secret: %q", se2.Message)
 	}
 	if !strings.Contains(se2.Message, "***") {

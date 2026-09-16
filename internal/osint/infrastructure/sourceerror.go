@@ -2,6 +2,9 @@
 package infrastructure
 
 import (
+	"context"
+	"errors"
+	"regexp"
 	"strings"
 )
 
@@ -10,6 +13,13 @@ import (
 func ClassifyErrorType(err error) string {
 	if err == nil {
 		return "unknown"
+	}
+	// Check for context sentinels FIRST before string matching
+	if errors.Is(err, context.Canceled) {
+		return "cancelled"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
 	}
 	errStr := err.Error()
 	return classifyErrorString(errStr)
@@ -44,59 +54,40 @@ func SanitizeErrorMessage(err error) string {
 
 // sanitizeErrorString removes sensitive patterns from error strings.
 func sanitizeErrorString(errStr string) string {
-	// List of sensitive patterns to redact
-	sensitivePatterns := []struct {
-		pattern string
-		replace string
-	}{
-		{`(?i)(api[_-]?key|apikey)\s*[:=]\s*[^\s]+`, "$1=***"},
-		{`(?i)(authorization|bearer)\s+[^\s]+`, "$1 ***"},
-		{`(?i)(password|secret|token|credential)\s*[:=]\s*[^\s]+`, "$1=***"},
-		{`(?i)(access[_-]?key|secret[_-]?key)\s*[:=]\s*[^\s]+`, "$1=***"},
-		{`\b[A-Za-z0-9+/]{40,}={0,2}\b`, "***"}, // base64-like strings
-		{`\b[0-9a-f]{32,}\b`, "***"},             // hex strings (32+ chars)
-		{`\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`, "***"}, // UUIDs
+	// Pre-compiled regex patterns for sensitive data redaction
+	// Each pattern uses capture group 1 for the prefix to preserve (including = or :)
+	redactionPatterns := []*regexp.Regexp{
+		// api_key=VALUE, apikey=VALUE, api-key=VALUE
+		regexp.MustCompile(`(?i)(api[_-]?key\s*[:=]\s*)[^\s,}"']+`),
+		// Authorization: Bearer VALUE, Authorization: Api-Key VALUE
+		regexp.MustCompile(`(?i)(authorization\s*:\s*(?:bearer|api[_-]?key)\s+)[^\s,}"']+`),
+		// password=VALUE, secret=VALUE, token=VALUE, credential=VALUE
+		regexp.MustCompile(`(?i)((?:password|secret|token|credential)\s*[:=]\s*)[^\s,}"']+`),
+		// access_key=VALUE, secret_key=VALUE
+		regexp.MustCompile(`(?i)((?:access[_-]?key|secret[_-]?key)\s*[:=]\s*)[^\s,}"']+`),
 	}
 
 	result := errStr
-	for _, sp := range sensitivePatterns {
-		// Simple string replacement for common patterns
-		// For more complex patterns, we'd use regex
-		if strings.Contains(strings.ToLower(result), strings.ToLower(sp.pattern)) {
-			// We can't easily do regex replacement here without importing regexp
-			// Just do basic redaction for common patterns
-		}
-	}
-
-	// Basic redactions using string replacement
-	redactions := []struct {
-		needle string
-	}{
-		{"api_key="},
-		{"apikey="},
-		{"api-key="},
-		{"authorization="},
-		{"bearer "},
-		{"password="},
-		{"secret="},
-		{"token="},
-		{"credential="},
-		{"access_key="},
-		{"secret_key="},
-	}
-
-	for _, r := range redactions {
-		if idx := strings.Index(strings.ToLower(result), r.needle); idx >= 0 {
-			end := idx + len(r.needle)
-			// Find the end of the value (space, comma, } or end of string)
-			valueEnd := end
-			for valueEnd < len(result) && result[valueEnd] != ' ' && result[valueEnd] != ',' && result[valueEnd] != '}' && result[valueEnd] != '"' && result[valueEnd] != '\'' {
-				valueEnd++
+	for _, re := range redactionPatterns {
+		result = re.ReplaceAllStringFunc(result, func(match string) string {
+			// Get capture group 1 (the prefix)
+			matches := re.FindStringSubmatch(match)
+			if len(matches) >= 2 && matches[1] != "" {
+				return matches[1] + "***"
 			}
-			if valueEnd > end {
-				result = result[:end] + "***" + result[valueEnd:]
+			// Fallback: find last = or : or space
+			lastDelim := -1
+			for i := len(match) - 1; i >= 0; i-- {
+				if match[i] == '=' || match[i] == ':' || match[i] == ' ' {
+					lastDelim = i
+					break
+				}
 			}
-		}
+			if lastDelim >= 0 {
+				return match[:lastDelim+1] + "***"
+			}
+			return "***"
+		})
 	}
 
 	return result
