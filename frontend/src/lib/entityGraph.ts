@@ -71,6 +71,10 @@ export type OsintEntityKind =
   | 'organization'
   | 'url'
   | 'country'
+  | 'ixp'
+  | 'facility'
+  | 'landing_station'
+  | 'submarine_cable'
   | 'unknown';
 
 export const ENTITY_KIND_ORDER: readonly OsintEntityKind[] = [
@@ -82,6 +86,10 @@ export const ENTITY_KIND_ORDER: readonly OsintEntityKind[] = [
   'organization',
   'url',
   'country',
+  'ixp',
+  'facility',
+  'landing_station',
+  'submarine_cable',
   'unknown',
 ] as const;
 
@@ -132,6 +140,26 @@ export const ENTITY_KIND_DESCRIPTORS: Record<OsintEntityKind, EntityKindDescript
     summaryKey: 'Código de país ISO.',
     tagClass: 'info',
   },
+  ixp: {
+    labelKey: 'IXP',
+    summaryKey: 'Punto de intercambio de Internet.',
+    tagClass: 'ok',
+  },
+  facility: {
+    labelKey: 'Facility',
+    summaryKey: 'Centro de datos / colocation.',
+    tagClass: 'info',
+  },
+  landing_station: {
+    labelKey: 'Landing Station',
+    summaryKey: 'Estación de aterrizaje de cable submarino.',
+    tagClass: 'info',
+  },
+  submarine_cable: {
+    labelKey: 'Cable Submarino',
+    summaryKey: 'Sistema de cable submarino (solo contexto).',
+    tagClass: 'warn',
+  },
   unknown: {
     labelKey: 'Sin clasificar',
     summaryKey: 'La entidad no declaró un tipo válido.',
@@ -149,6 +177,10 @@ export function asEntityKind(raw: string): OsintEntityKind {
     'organization',
     'url',
     'country',
+    'ixp',
+    'facility',
+    'landing_station',
+    'submarine_cable',
   ];
   return known.includes(raw as OsintEntityKind) ? (raw as OsintEntityKind) : 'unknown';
 }
