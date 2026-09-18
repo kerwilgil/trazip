@@ -1,0 +1,27 @@
+TRAZIP — Licencia Propietaria
+
+Copyright © 2026 Kerwil Gil.
+All rights reserved.
+
+1. TRAZIP es software propietario de Kerwil Gil. Salvo autorización escrita del
+   titular o un acuerdo separado, no se concede licencia alguna sobre el código
+   fuente.
+
+2. Copiar, modificar, redistribuir o sublicenciar TRAZIP requiere autorización
+   previa y por escrito del titular, salvo los derechos irrenunciables que
+   conceda la ley aplicable.
+
+3. Componentes de terceros: TRAZIP incorpora componentes de terceros que
+   conservan sus propias licencias. Nada en este documento relicencia ni
+   restringe dichos componentes. Los avisos y obligaciones aplicables se
+   recopilan en THIRD_PARTY_NOTICES.md, que prevalece para esos componentes,
+   y los textos de licencia correspondientes en THIRD_PARTY_LICENSES/.
+
+4. Licencias históricas: las versiones y copias de TRAZIP previamente
+   distribuidas bajo la licencia MIT conservan íntegros los derechos MIT
+   concedidos con esas copias. Este documento no revoca ni altera los derechos
+   ya otorgados sobre esas versiones; aplica a versiones futuras y a material
+   nuevo bajo el control del titular.
+
+5. El uso de binarios de versiones futuras podrá quedar sujeto a un contrato
+   de licencia de usuario final (EULA) separado.
